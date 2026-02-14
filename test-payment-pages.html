@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test - Páginas de Pago CINEA</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem 0;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 1rem;
+        }
+
+        .test-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        .test-section {
+            margin-bottom: 2rem;
+        }
+
+        .test-section h2 {
+            color: #667eea;
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 0.5rem;
+        }
+
+        .test-links {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .test-links a {
+            display: block;
+            padding: 1rem;
+            background: #f0f0f0;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .test-links a:hover {
+            background: #e0e0e0;
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+
+        .test-links a.success {
+            background: #d4edda;
+            border-color: #27ae60;
+            color: #155724;
+        }
+
+        .test-links a.success:hover {
+            background: #c3e6cb;
+        }
+
+        .test-links a.failed {
+            background: #f8d7da;
+            border-color: #dc3545;
+            color: #721c24;
+        }
+
+        .test-links a.failed:hover {
+            background: #f5c6cb;
+        }
+
+        .test-input {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        input, select {
+            padding: 0.8rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        button {
+            flex: 1;
+            padding: 0.8rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+            color: white;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(39, 174, 96, 0.3);
+        }
+
+        .btn-failed {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white;
+        }
+
+        .btn-failed:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.3);
+        }
+
+        .info-box {
+            background: #e8f4f8;
+            border-left: 4px solid #0288d1;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .info-box strong {
+            color: #0288d1;
+        }
+
+        .code-example {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-top: 0.5rem;
+        }
+
+        .code-example code {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            color: #333;
+        }
+
+        .note {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-top: 1rem;
+            color: #856404;
+        }
+
+        .note strong {
+            color: #856404;
+        }
+
+        @media (max-width: 600px) {
+            .test-links {
+                grid-template-columns: 1fr;
+            }
+
+            .test-input {
+                grid-template-columns: 1fr;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="test-panel">
+            <h1>🎬 Test - Páginas de Pago CINEA</h1>
+
+            <!-- Éxito -->
+            <div class="test-section">
+                <h2>✅ Pago Exitoso</h2>
+                
+                <div class="info-box">
+                    <strong>Descripción:</strong> Landing page que se muestra cuando el pago se completa exitosamente. 
+                    Incluye opción de imprimir en impresora térmica.
+                </div>
+
+                <div class="test-input">
+                    <input 
+                        type="text" 
+                        id="ticketSuccess" 
+                        placeholder="Número de ticket"
+                        value="TICKET-2026-001"
+                    >
+                </div>
+
+                <div class="test-links">
+                    <a href="#" onclick="testSuccess(document.getElementById('ticketSuccess').value)" class="success">
+                        🔗 Abrir Página de Éxito
+                    </a>
+                    <a href="#" onclick="copyLink('success', document.getElementById('ticketSuccess').value)" class="success">
+                        📋 Copiar URL
+                    </a>
+                </div>
+
+                <div class="code-example">
+                    <code id="codeSuccess">/payment-success?ticket=TICKET-2026-001</code>
+                </div>
+
+                <div class="note">
+                    <strong>💡 Nota:</strong> Puedes cambiar el número de ticket arriba y se actualizará la URL automáticamente.
+                </div>
+            </div>
+
+            <!-- Fallo -->
+            <div class="test-section">
+                <h2>❌ Pago Fallido</h2>
+                
+                <div class="info-box">
+                    <strong>Descripción:</strong> Landing page que se muestra cuando el pago falla. 
+                    Incluye información del error y opciones para reintentar.
+                </div>
+
+                <div class="test-input">
+                    <input 
+                        type="text" 
+                        id="ticketFailed" 
+                        placeholder="Código de referencia"
+                        value="ERR-20260121-001"
+                    >
+                    <select id="errorCode">
+                        <option value="insufficient_funds">Fondos insuficientes</option>
+                        <option value="card_declined">Tarjeta rechazada</option>
+                        <option value="expired_card">Tarjeta expirada</option>
+                        <option value="invalid_cvv">CVV inválido</option>
+                        <option value="network_error">Error de red</option>
+                        <option value="gateway_timeout">Timeout del servidor</option>
+                        <option value="authentication_failed">Autenticación fallida</option>
+                        <option value="duplicate_transaction">Transacción duplicada</option>
+                        <option value="unknown_error">Error desconocido</option>
+                    </select>
+                </div>
+
+                <div class="test-links">
+                    <a href="#" onclick="testFailed(document.getElementById('ticketFailed').value, document.getElementById('errorCode').value)" class="failed">
+                        🔗 Abrir Página de Fallo
+                    </a>
+                    <a href="#" onclick="copyLink('failed', document.getElementById('ticketFailed').value)" class="failed">
+                        📋 Copiar URL
+                    </a>
+                </div>
+
+                <div class="code-example">
+                    <code id="codeFailed">/payment-failed?ticket=ERR-20260121-001&error=insufficient_funds</code>
+                </div>
+
+                <div class="note">
+                    <strong>💡 Nota:</strong> Selecciona un tipo de error arriba para ver cómo se muestra en la página.
+                </div>
+            </div>
+
+            <!-- Información de Integración -->
+            <div class="test-section">
+                <h2>🔧 Información de Integración</h2>
+                
+                <div class="info-box">
+                    <strong>📁 Archivos Creados:</strong><br>
+                    ✓ src/views/PaymentSuccess.vue<br>
+                    ✓ src/views/PaymentFailed.vue<br>
+                    ✓ src/services/printService.js<br>
+                    ✓ src/composables/usePaymentPages.js<br>
+                    ✓ Router actualizado con nuevas rutas
+                </div>
+
+                <div class="info-box" style="margin-top: 1rem;">
+                    <strong>📚 Documentación:</strong><br>
+                    ✓ PAYMENT_PAGES_GUIDE.md - Guía completa<br>
+                    ✓ PAYMENT_QUICK_START.md - Inicio rápido<br>
+                    ✓ PAYMENT_INTEGRATION_EXAMPLE.js - Ejemplos
+                </div>
+
+                <div class="info-box" style="margin-top: 1rem;">
+                    <strong>🚀 Para Empezar:</strong><br>
+                    1. Lee PAYMENT_QUICK_START.md<br>
+                    2. Integra usePaymentPages en tu Checkout.vue<br>
+                    3. Prueba las rutas desde aquí<br>
+                    4. Conecta una impresora térmica
+                </div>
+            </div>
+
+            <!-- Ejemplos de URLs -->
+            <div class="test-section">
+                <h2>📌 Ejemplos de URLs</h2>
+                
+                <div class="test-links">
+                    <a href="/payment-success?ticket=TICKET-2026-001" class="success">Éxito - Ejemplo 1</a>
+                    <a href="/payment-success?ticket=TICKET-2026-002" class="success">Éxito - Ejemplo 2</a>
+                    <a href="/payment-failed?ticket=ERR-001&error=insufficient_funds" class="failed">Fallo - Fondos</a>
+                    <a href="/payment-failed?ticket=ERR-002&error=card_declined" class="failed">Fallo - Tarjeta</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function testSuccess(ticket) {
+            if (!ticket) {
+                alert('Por favor ingresa un número de ticket');
+                return;
+            }
+            window.location.href = `/payment-success?ticket=${encodeURIComponent(ticket)}`;
+        }
+
+        function testFailed(reference, errorCode) {
+            if (!reference) {
+                alert('Por favor ingresa un código de referencia');
+                return;
+            }
+            window.location.href = `/payment-failed?ticket=${encodeURIComponent(reference)}&error=${encodeURIComponent(errorCode)}`;
+        }
+
+        function copyLink(type, value) {
+            let url = '';
+            if (type === 'success') {
+                url = `/payment-success?ticket=${encodeURIComponent(value)}`;
+            } else {
+                const errorCode = document.getElementById('errorCode').value;
+                url = `/payment-failed?ticket=${encodeURIComponent(value)}&error=${encodeURIComponent(errorCode)}`;
+            }
+            
+            navigator.clipboard.writeText(url).then(() => {
+                alert('✓ URL copiada al portapapeles:\n\n' + url);
+            }).catch(() => {
+                alert('URL:\n\n' + url);
+            });
+        }
+
+        // Actualizar URL de ejemplo en tiempo real
+        document.getElementById('ticketSuccess').addEventListener('input', function() {
+            document.getElementById('codeSuccess').textContent = `/payment-success?ticket=${encodeURIComponent(this.value)}`;
+        });
+
+        document.getElementById('ticketFailed').addEventListener('input', function() {
+            updateFailedCode();
+        });
+
+        document.getElementById('errorCode').addEventListener('change', function() {
+            updateFailedCode();
+        });
+
+        function updateFailedCode() {
+            const ticket = document.getElementById('ticketFailed').value;
+            const error = document.getElementById('errorCode').value;
+            document.getElementById('codeFailed').textContent = `/payment-failed?ticket=${encodeURIComponent(ticket)}&error=${encodeURIComponent(error)}`;
+        }
+    </script>
+</body>
+</html>
