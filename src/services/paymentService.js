@@ -22,13 +22,13 @@ export const paymentService = {
       let data = response.data
       console.log('Raw API response:', data)
       
-      // Manejar estructura { success, providers, count }
-      if (data.success && data.providers) {
+      // Manejar estructura { success: true, providers: [...], count: N }
+      if (data.success && data.providers && Array.isArray(data.providers)) {
         console.log('Found providers in response.providers:', data.providers)
-        return Array.isArray(data.providers) ? data.providers : []
+        return data
       }
       
-      // Manejar estructura { success, data: [...] }
+      // Manejar estructura { success: true, data: [...] }
       if (data.success && data.data && Array.isArray(data.data)) {
         console.log('Found providers in response.data:', data.data)
         return data.data
@@ -103,6 +103,21 @@ export const paymentService = {
       return response.data
     } catch (error) {
       console.error(`Error fetching payment status ${paymentId}:`, error)
+      throw error
+    }
+  },
+
+  /**
+   * Obtener detalle completo de una orden de pago
+   * @param {string} orderNumber
+   * @returns {Promise<Object>}
+   */
+  async getPaymentOrderDetails(orderNumber) {
+    try {
+      const response = await api.get(`/payment-order/${orderNumber}/details`)
+      return response.data
+    } catch (error) {
+      console.error(`Error fetching payment order details ${orderNumber}:`, error)
       throw error
     }
   },

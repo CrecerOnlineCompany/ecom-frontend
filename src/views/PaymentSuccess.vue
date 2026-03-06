@@ -9,8 +9,17 @@
           <p class="success-subtitle">Tu compra ha sido procesada correctamente</p>
         </div>
 
+        <p v-if="isLoadingData" class="loading-message">Cargando información de la compra...</p>
+        <p v-else-if="loadError" class="loading-error">{{ loadError }}</p>
+        <div v-if="requiresDeskAssistance" class="desk-assistance">
+          <h3>Atención en ventanilla requerida</h3>
+          <p>No pudimos validar todos los datos del pago en línea.</p>
+          <p><strong>Orden:</strong> {{ orderNumberDisplay }}</p>
+          <p>Acércate a ventanilla con este número para finalizar la entrega de entradas.</p>
+        </div>
+
         <!-- Ticket Information -->
-        <div class="ticket-display" v-if="ticketData">
+        <div class="ticket-display" v-if="ticketData && !requiresDeskAssistance">
           <div class="ticket-section">
             <h3>Información de la Entrada</h3>
             <div class="info-grid">
@@ -36,7 +45,7 @@
               </div>
               <div class="info-item">
                 <span class="info-label">Precio:</span>
-                <span class="info-value">{{ ticketData.price }} €</span>
+                <span class="info-value">{{ ticketData.price }} {{ currencyDisplay }}</span>
               </div>
             </div>
           </div>
@@ -46,8 +55,12 @@
         <div class="purchase-details">
           <h3>Detalles de la Compra</h3>
           <div class="detail-row">
-            <span>Número de Entrada:</span>
-            <span class="code">{{ ticketParam }}</span>
+            <span>Número de Orden:</span>
+            <span class="code">{{ orderNumberDisplay }}</span>
+          </div>
+          <div class="detail-row">
+            <span>Código de Compra:</span>
+            <span class="code">{{ orderNumberDisplay }}</span>
           </div>
           <div class="detail-row">
             <span>Fecha de Compra:</span>
@@ -55,11 +68,11 @@
           </div>
           <div class="detail-row">
             <span>Importe Pagado:</span>
-            <span class="amount">{{ ticketData?.price || '10.00' }} €</span>
+            <span class="amount">{{ amountDisplay }} {{ currencyDisplay }}</span>
           </div>
           <div class="detail-row">
             <span>Estado:</span>
-            <span class="status-badge status-success">Completado</span>
+            <span class="status-badge status-success">{{ paymentStatusDisplay }}</span>
           </div>
         </div>
 
@@ -67,7 +80,7 @@
         <div class="next-steps">
           <h3>Próximos Pasos</h3>
           <ol>
-            <li>Recuerda tu número de entrada: <strong>{{ ticketParam }}</strong></li>
+            <li>Recuerda tu número de orden: <strong>{{ orderNumberDisplay }}</strong></li>
             <li>Recibirás un email de confirmación con tu comprobante</li>
             <li>Puedes imprimir tu entrada desde el botón de abajo</li>
             <li>Presenta tu entrada en la taquilla del cine</li>
@@ -80,7 +93,7 @@
           <button 
             @click="handlePrint" 
             class="btn btn-primary btn-large"
-            :disabled="isPrinting"
+            :disabled="isPrinting || requiresDeskAssistance || !ticketData"
           >
             <span v-if="!isPrinting">Imprimir Entrada</span>
             <span v-else>Imprimiendo...</span>
@@ -88,6 +101,7 @@
           <button 
             @click="downloadTicket" 
             class="btn btn-secondary btn-large"
+            :disabled="requiresDeskAssistance || !ticketData"
           >
             Descargar Entrada
           </button>
@@ -95,6 +109,7 @@
             Volver al Inicio
           </router-link>
         </div>
+        <p v-if="printMessage" :class="['print-message', printMessageType]">{{ printMessage }}</p>
 
         <!-- Contact Info -->
         <div class="contact-section">
@@ -113,19 +128,69 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { printService } from '@/services/printService'
+import { paymentService } from '@/services/paymentService'
+import { useCartStore } from '@/stores/cartStore'
 
-const router = useRouter()
 const route = useRoute()
+const cartStore = useCartStore()
 
 const ticketParam = ref('')
+const orderParam = ref('')
 const ticketData = ref(null)
+const ticketsData = ref([])
 const isPrinting = ref(false)
+const isLoadingData = ref(false)
+const loadError = ref('')
+const printMessage = ref('')
+const printMessageType = ref('info')
+const orderData = ref(null)
+const paymentData = ref(null)
+const requiresDeskAssistance = ref(false)
+
+const formatDateFromIso = (isoDate) => {
+  if (!isoDate) return 'N/A'
+  const date = new Date(isoDate)
+  if (Number.isNaN(date.getTime())) return 'N/A'
+  return date.toLocaleDateString('es-AR')
+}
+
+const formatTimeFromIso = (isoDate) => {
+  if (!isoDate) return 'N/A'
+  const date = new Date(isoDate)
+  if (Number.isNaN(date.getTime())) return 'N/A'
+  return date.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+}
+
+const normalizeTicket = (rawTicket, order) => {
+  const details = Array.isArray(rawTicket?.details) ? rawTicket.details : []
+  const seatCodes = details
+    .map((detail) => detail?.seat_code || `${detail?.row_number || ''}${detail?.seat_number || ''}`)
+    .filter(Boolean)
+
+  return {
+    ticketNumber: String(rawTicket?.ticket_number || rawTicket?.id || 'N/A'),
+    movieTitle: String(order?.screening?.movie?.title || 'Película'),
+    screeningDate: formatDateFromIso(order?.screening?.start_time),
+    screeningTime: formatTimeFromIso(order?.screening?.start_time),
+    seatNumber: seatCodes.length ? seatCodes.join(', ') : 'N/A',
+    price: String(rawTicket?.price || '0.00')
+  }
+}
+
+const normalizePaymentStatusText = (statusRaw) => {
+  const status = String(statusRaw || '').toLowerCase()
+  if (status === 'completed' || status === 'approved') return 'Completado'
+  if (status === 'processing' || status === 'pending') return 'Procesando'
+  if (status === 'rejected' || status === 'declined') return 'Rechazado'
+  return 'Completado'
+}
 
 const purchaseDate = computed(() => {
-  const now = new Date()
-  return now.toLocaleDateString('es-ES', {
+  const raw = paymentData.value?.paidAt || paymentData.value?.updatedAt
+  const date = raw ? new Date(raw) : new Date()
+  return date.toLocaleDateString('es-ES', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -134,90 +199,207 @@ const purchaseDate = computed(() => {
   })
 })
 
-onMounted(() => {
+const orderNumberDisplay = computed(() => {
+  return orderData.value?.orderNumber || orderParam.value || 'N/A'
+})
+
+const amountDisplay = computed(() => {
+  const amount = Number(paymentData.value?.amount ?? orderData.value?.totalAmount)
+  return Number.isFinite(amount) ? amount.toFixed(2) : 'No disponible'
+})
+
+const currencyDisplay = computed(() => {
+  return paymentData.value?.currency || orderData.value?.currency || 'ARS'
+})
+
+const paymentStatusDisplay = computed(() => {
+  return normalizePaymentStatusText(paymentData.value?.status)
+})
+
+const normalizeOrderNumber = (value) => {
+  return String(value || '').trim()
+}
+
+const clearCartIfMatchingOrder = (resolvedOrderNumber) => {
+  const sessionOrder = normalizeOrderNumber(cartStore.currentSession?.order_number)
+  const successOrder = normalizeOrderNumber(
+    resolvedOrderNumber || orderParam.value || orderData.value?.orderNumber
+  )
+
+  if (!sessionOrder || !successOrder) return
+  if (sessionOrder !== successOrder) return
+
+  cartStore.clearCart()
+  cartStore.clearPaymentSession()
+}
+
+onMounted(async () => {
   // Obtén el número de ticket de los parámetros
   ticketParam.value = route.query.ticket || route.params.ticket || 'N/A'
+  orderParam.value = route.query.order || route.params.order || ''
+  orderData.value = {
+    orderNumber: String(orderParam.value || 'N/A'),
+    currency: 'ARS'
+  }
 
-  // Si no hay ticket, redirige
-  if (!ticketParam.value || ticketParam.value === 'N/A') {
-    router.push('/')
+  // Si no hay número de orden no podemos consultar detalles
+  if (!orderParam.value) {
+    requiresDeskAssistance.value = true
+    loadError.value = 'Falta el número de orden en la URL. Continúa en ventanilla.'
     return
   }
 
   // Intenta obtener datos del ticket
-  loadTicketData()
+  await loadTicketData()
+  clearCartIfMatchingOrder(orderData.value?.orderNumber)
 
   // Auto-scroll hacia el top
   window.scrollTo(0, 0)
 })
 
-const loadTicketData = () => {
+const persistTickets = (tickets = []) => {
+  if (!tickets.length) return
   try {
-    // Intenta obtener los datos del localStorage
     const storedTickets = localStorage.getItem('tickets')
-    if (storedTickets) {
-      const tickets = JSON.parse(storedTickets)
-      const ticket = tickets.find(t => t.ticketNumber === ticketParam.value)
-      if (ticket) {
-        ticketData.value = ticket
-        return
+    const existing = storedTickets ? JSON.parse(storedTickets) : []
+    const byId = new Map(existing.map(t => [t.ticketNumber, t]))
+    for (const ticket of tickets) {
+      if (ticket?.ticketNumber) {
+        byId.set(ticket.ticketNumber, ticket)
       }
     }
+    localStorage.setItem('tickets', JSON.stringify(Array.from(byId.values())))
+  } catch (err) {
+    console.warn('No se pudo persistir tickets en localStorage:', err)
+  }
+}
 
-    // Usa datos de ejemplo si no encuentra nada
-    ticketData.value = {
-      ticketNumber: ticketParam.value,
-      movieTitle: 'Película Seleccionada',
-      screeningDate: new Date().toLocaleDateString('es-ES'),
-      screeningTime: '20:00',
-      seatNumber: 'A1',
-      price: '10.00'
+const attemptAutoPrint = async () => {
+  if (!ticketsData.value.length && !ticketData.value) return
+
+  const printableTickets = ticketsData.value.length ? ticketsData.value : [ticketData.value]
+  let success = false
+
+  if (printableTickets.length > 1) {
+    success = await printService.printMultipleTickets(printableTickets)
+  } else {
+    success = await printService.printThermalTicket(printableTickets[0])
+  }
+
+  if (success) {
+    printMessageType.value = 'success'
+    printMessage.value = 'Impresión automática iniciada.'
+  } else {
+    printMessageType.value = 'error'
+    printMessage.value = 'No se pudo imprimir automáticamente. Usa el botón "Imprimir Entrada".'
+  }
+}
+
+const loadTicketData = async () => {
+  isLoadingData.value = true
+  loadError.value = ''
+  requiresDeskAssistance.value = false
+
+  try {
+    const detailsResponse = await paymentService.getPaymentOrderDetails(orderParam.value)
+    const response = detailsResponse || {}
+
+    if (!response.success || !response.order) {
+      throw new Error('Respuesta inválida del endpoint de detalle de orden')
     }
+
+    const rawOrder = response.order
+    const rawTickets = Array.isArray(response.tickets) ? response.tickets : []
+    const rawPayments = Array.isArray(response.payments) ? response.payments : []
+
+    const latestPayment = rawPayments[0] || {}
+    const amountNumber = Number(rawOrder.total_amount ?? latestPayment?.response_data?.amount)
+    if (!Number.isFinite(amountNumber)) {
+      throw new Error('Monto no disponible desde backend')
+    }
+
+    orderData.value = {
+      orderNumber: String(rawOrder.order_number || orderParam.value),
+      currency: String(rawOrder.currency || 'ARS'),
+      totalAmount: amountNumber
+    }
+
+    paymentData.value = {
+      amount: amountNumber,
+      status: latestPayment.status || rawOrder.status || 'completed',
+      paidAt: rawOrder.paid_at || latestPayment.completed_at || null,
+      updatedAt: latestPayment.updated_at || rawOrder.updated_at || null,
+      currency: String(rawOrder.currency || 'ARS')
+    }
+
+    if (rawTickets.length === 0) {
+      requiresDeskAssistance.value = true
+      loadError.value = 'Pago confirmado, pero las entradas aún no están disponibles. Continúa en ventanilla con tu número de orden.'
+      ticketData.value = null
+      ticketsData.value = []
+      printMessageType.value = 'error'
+      printMessage.value = 'Impresión deshabilitada: ve a ventanilla con tu número de orden.'
+      return
+    }
+
+    const normalizedTickets = rawTickets.map(ticket => normalizeTicket(ticket, rawOrder))
+    ticketsData.value = normalizedTickets
+    ticketData.value = normalizedTickets[0]
+
+    persistTickets(normalizedTickets)
+    await attemptAutoPrint()
   } catch (e) {
     console.error('Error al cargar datos del ticket:', e)
-    ticketData.value = {
-      ticketNumber: ticketParam.value,
-      movieTitle: 'N/A',
-      screeningDate: 'N/A',
-      screeningTime: 'N/A',
-      seatNumber: 'N/A',
-      price: '10.00'
-    }
+    loadError.value = 'Faltan datos del pago o el backend no respondió. Continúa en ventanilla.'
+    requiresDeskAssistance.value = true
+    ticketData.value = null
+    ticketsData.value = []
+    paymentData.value = null
+    printMessageType.value = 'error'
+    printMessage.value = 'Impresión deshabilitada: ve a ventanilla con tu número de orden.'
+  } finally {
+    isLoadingData.value = false
   }
 }
 
 const handlePrint = async () => {
+  if (requiresDeskAssistance.value) {
+    printMessageType.value = 'error'
+    printMessage.value = 'Impresión deshabilitada: ve a ventanilla con tu número de orden.'
+    return
+  }
+
   isPrinting.value = true
   try {
-    const success = await printService.printThermalTicket({
-      ticketNumber: ticketParam.value,
-      movieTitle: ticketData.value?.movieTitle || 'Película',
-      screeningDate: ticketData.value?.screeningDate || 'N/A',
-      screeningTime: ticketData.value?.screeningTime || 'N/A',
-      seatNumber: ticketData.value?.seatNumber || 'N/A',
-      price: ticketData.value?.price || '10.00'
-    })
+    const printableTickets = ticketsData.value.length ? ticketsData.value : [ticketData.value]
+    const success = printableTickets.length > 1
+      ? await printService.printMultipleTickets(printableTickets)
+      : await printService.printThermalTicket(printableTickets[0])
 
     if (success) {
-      console.log('Impresión iniciada correctamente')
+      printMessageType.value = 'success'
+      printMessage.value = 'Impresión iniciada correctamente.'
     } else {
-      alert('No se pudo completar la impresión. Verifica tu impresora térmica.')
+      printMessageType.value = 'error'
+      printMessage.value = 'No se pudo completar la impresión. Verifica tu impresora.'
     }
   } catch (error) {
     console.error('Error durante la impresión:', error)
-    alert('Error al intentar imprimir. Intenta de nuevo.')
+    printMessageType.value = 'error'
+    printMessage.value = 'Error al intentar imprimir. Intenta de nuevo.'
   } finally {
     isPrinting.value = false
   }
 }
 
 const downloadTicket = () => {
+  if (!ticketData.value || requiresDeskAssistance.value) return
   // Función placeholder para descargar el ticket como PDF
   const html = `
     <div style="text-align: center; padding: 20px; font-family: Arial, sans-serif;">
       <h1>CINEA - Entrada</h1>
       <p><strong>${ticketData.value?.movieTitle || 'Película'}</strong></p>
-      <p>Número: ${ticketParam.value}</p>
+      <p>Número de orden: ${orderNumberDisplay.value}</p>
       <p>Fecha: ${ticketData.value?.screeningDate || 'N/A'}</p>
       <p>Hora: ${ticketData.value?.screeningTime || 'N/A'}</p>
       <p>Asiento: ${ticketData.value?.seatNumber || 'N/A'}</p>
@@ -228,7 +410,7 @@ const downloadTicket = () => {
   const url = window.URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `entrada_${ticketParam.value}.html`
+  a.download = `entrada_${orderNumberDisplay.value}.html`
   a.click()
   window.URL.revokeObjectURL(url)
 }
@@ -238,7 +420,6 @@ const downloadTicket = () => {
 .payment-success-page {
   min-height: 100vh;
   padding: 2rem 0;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -546,6 +727,44 @@ h1 {
 .contact-section .hours {
   font-size: 0.9rem;
   color: #999;
+}
+
+.loading-message,
+.loading-error,
+.print-message {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.loading-message {
+  color: #e0e0e0;
+}
+
+.loading-error,
+.print-message.error {
+  color: #fca5a5;
+}
+
+.print-message.success {
+  color: #86efac;
+}
+
+.desk-assistance {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  color: #fecaca;
+}
+
+.desk-assistance h3 {
+  margin: 0 0 0.5rem 0;
+  color: #fca5a5;
+}
+
+.desk-assistance p {
+  margin: 0.35rem 0;
 }
 
 /* Responsive */

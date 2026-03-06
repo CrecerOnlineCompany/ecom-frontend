@@ -53,11 +53,16 @@ deploy:
 	fi
 	
 	@echo ""
+	@echo "3️⃣  Subiendo por SFTP..."
+	npm run deploy:sftp
+	@echo "   ✓ Subida SFTP completada"
+	@echo ""
 	@echo "✅ ¡Despliegue completado exitosamente!"
 	@echo ""
 	@echo "📍 Resumen:"
 	@echo "   - Blade view: $(BLADE_FILE)"
 	@echo "   - Assets: $(PUBLIC_ASSETS)"
+	@echo "   - SFTP: OK"
 
 clean:
 	@echo "🗑️  Eliminando directorio dist/"

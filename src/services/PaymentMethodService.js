@@ -41,12 +41,28 @@ class PaymentMethodService {
         payment_provider_id: paymentData.payment_provider_id,
         screening_id: paymentData.screening_id,
         seat_ids: paymentData.seat_ids,
-        total_price: paymentData.total_price,
-        seat_count: paymentData.seat_count,
         customer_email: paymentData.customer_email,
         customer_name: paymentData.customer_name
       })
-      return response.data
+
+      if (response?.data?.success === false) {
+        const backendError = new Error(response.data.message || 'No se pudo iniciar el pago QR')
+        backendError.code = response.data.error_code || 'PAYMENT_ERROR'
+        backendError.backend = response.data
+        throw backendError
+      }
+      
+      // Normalizar response
+      return {
+        success: response.data.success,
+        order_id: response.data.order_id,
+        order_number: response.data.order_number,
+        reserved_until: response.data.reserved_until,
+        payment_ticket_id: response.data.payment_ticket_id,
+        qr_data: response.data.qr_data || response.data.qr_code,
+        error_code: response.data.error_code,
+        message: response.data.message
+      }
     } catch (error) {
       console.error('Error processing QR payment:', error)
       throw error
@@ -62,12 +78,18 @@ class PaymentMethodService {
         payment_provider_id: paymentData.payment_provider_id,
         screening_id: paymentData.screening_id,
         seat_ids: paymentData.seat_ids,
-        total_price: paymentData.total_price,
-        seat_count: paymentData.seat_count,
         customer_email: paymentData.customer_email,
         customer_name: paymentData.customer_name
       })
-      return response.data
+      
+      // Normalizar response
+      return {
+        success: response.data.success,
+        order_id: response.data.order_id,
+        order_number: response.data.order_number,
+        reserved_until: response.data.reserved_until,
+        payment_ticket_id: response.data.payment_ticket_id
+      }
     } catch (error) {
       console.error('Error processing terminal payment:', error)
       throw error
@@ -108,9 +130,10 @@ class PaymentMethodService {
   }
 
   /**
-   * Monitorear estado de pago QR
+   * Monitorear estado de pago (QR o Terminal)
+   * Endpoint único para ambos métodos según el nuevo flujo
    */
-  async monitorQrPayment(paymentTicketId) {
+  async monitorPayment(paymentTicketId) {
     try {
       const response = await this.api.get(`/payment-status/${paymentTicketId}`)
       return response.data
@@ -121,14 +144,20 @@ class PaymentMethodService {
   }
 
   /**
-   * Monitorear estado de pago Terminal
+   * Verificación manual de pago desde popup de orden activa.
+   * Este endpoint puede forzar consulta al proveedor (ej: Mercado Pago).
    */
-  async monitorTerminalPayment(orderId) {
+  async manualCheckPayment(paymentContext = {}) {
     try {
-      const response = await this.api.get(`/terminal-payment-status/${orderId}`)
+      const response = await this.api.post('/payment-status/manual-check', {
+        payment_ticket_id: paymentContext.payment_ticket_id,
+        order_number: paymentContext.order_number,
+        order_id: paymentContext.order_id,
+        payment_provider_id: paymentContext.payment_provider_id
+      })
       return response.data
     } catch (error) {
-      console.error('Error monitoring terminal payment:', error)
+      console.error('Error in manual payment check:', error)
       throw error
     }
   }
@@ -238,6 +267,21 @@ class PaymentMethodService {
       return response.data
     } catch (error) {
       console.error('Error cancelling payment:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Cancelar orden pendiente por numero de orden
+   */
+  async cancelOrderByNumber(orderNumber) {
+    try {
+      const response = await this.api.post('/payment-cancel', {
+        order_number: orderNumber
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error cancelling order by number:', error)
       throw error
     }
   }

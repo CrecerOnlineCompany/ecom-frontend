@@ -50,7 +50,11 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { paymentMethodService } from '@/services/PaymentMethodService'
+import { useCartStore } from '@/stores/cartStore'
+import { processPaymentErrorMessage } from '@/utils/errorHelpers'
 import PaymentTicketDisplay from '@/components/PaymentTicketDisplay.vue'
+
+const cartStore = useCartStore()
 
 const props = defineProps({
   paymentProviderId: {
@@ -109,6 +113,45 @@ const statusMessages = {
   rejected: '✗ Rechazado'
 }
 
+const normalizeSeatIds = (seatIds = []) => [...seatIds].map(id => String(id)).sort()
+
+const isSameSeatSelection = (left = [], right = []) => {
+  const a = normalizeSeatIds(left)
+  const b = normalizeSeatIds(right)
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+const canReuseActiveSession = () => {
+  const session = cartStore.currentSession
+  if (!session || !cartStore.isSessionActive) return false
+
+  const sameMethod = session.payment_method === 'terminal'
+  const sameProvider = Number(session.provider_id) === Number(props.paymentProviderId)
+  const sameScreening = Number(session.screening_id) === Number(props.screeningId)
+  const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+  const hasTicket = !!session.payment_ticket_id
+
+  return sameMethod && sameProvider && sameScreening && sameSeats && hasTicket
+}
+
+const restoreSession = () => {
+  const session = cartStore.currentSession
+  if (!session) return false
+
+  orderId.value = session.order_id || session.order_number
+  orderInitialized.value = true
+  currentStatus.value = 'waiting'
+  displayStatus.value = 'Acerca tu tarjeta'
+  startMonitoring()
+  return true
+}
+
+const normalizePaymentStatus = (statusResponse) => {
+  const rawStatus = statusResponse?.status
+  return typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : ''
+}
+
 /**
  * Inicializar terminal
  */
@@ -122,15 +165,25 @@ const initializeTerminal = async () => {
       payment_provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
-      total_price: props.amount,
-      seat_count: props.seatIds.length,
-      customer_email: props.customerEmail,
-      customer_name: props.customerName
+      customer_email: props.customerEmail || 'default@gmail.com',
+      customer_name: props.customerName || 'default'
     })
 
     if (!response || !response.success) {
       throw new Error(response?.message || 'Error inicializando terminal')
     }
+
+    // Guardar sesión de pago en cartStore
+    cartStore.setPaymentSession({
+      order_id: response.order_id,
+      order_number: response.order_number,
+      reserved_until: response.reserved_until,
+      payment_ticket_id: response.payment_ticket_id,
+      payment_method: 'terminal',
+      provider_id: props.paymentProviderId,
+      screening_id: props.screeningId,
+      seat_ids: props.seatIds
+    })
 
     // Guardar datos de la orden
     orderId.value = response.order_id
@@ -143,8 +196,28 @@ const initializeTerminal = async () => {
   } catch (err) {
     console.error('Error initializing terminal:', err)
     
+    // Procesar el mensaje de error
+    const errorMessage = err?.message || err?.response?.data?.message || 'Error inicializando terminal'
+    const processedError = processPaymentErrorMessage(errorMessage)
+    
+    // Si es un error de asientos vendidos o similar, mostrar error
+    if (errorMessage && errorMessage.includes('Seat reservation failed')) {
+      error.value = processedError
+      emit('payment-error', error.value)
+      isLoading.value = false
+      return
+    }
+    
+    // Si es otro tipo de error crítico, también mostrar
+    if (errorMessage && (errorMessage.includes('not found') || errorMessage.includes('invalid'))) {
+      error.value = processedError
+      emit('payment-error', error.value)
+      isLoading.value = false
+      return
+    }
+    
     // Fallback: Permitir funcionalidad sin backend
-    // Generar un ID local si el backend no responde
+    // Generar un ID local si el backend no responde (para errores temporales)
     orderId.value = `TERMINAL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     orderInitialized.value = true
     currentStatus.value = 'waiting'
@@ -168,22 +241,27 @@ const initializeTerminal = async () => {
 const startMonitoring = () => {
   timeoutSeconds.value = props.timeoutDuration
 
-  // Verificar estado cada 1.5 segundos
+  // Verificar estado cada 4 segundos
   monitoringInterval = setInterval(async () => {
     try {
-      const status = await paymentMethodService.monitorTerminalPayment(orderId.value)
+      const paymentTicketId = cartStore.currentSession?.payment_ticket_id
+      if (!paymentTicketId) return
 
-      if (status && status.status) {
-        if (status.status === 'completed' || status.status === 'approved') {
+      const status = await paymentMethodService.monitorPayment(paymentTicketId)
+
+      const normalizedStatus = normalizePaymentStatus(status)
+      if (normalizedStatus) {
+        if (normalizedStatus === 'completed' || normalizedStatus === 'approved') {
           currentStatus.value = 'completed'
           displayStatus.value = '✓ Pago confirmado'
           paymentCompleted.value = true
           stopMonitoring()
           emit('payment-success', {
             orderId: orderId.value,
+            paymentTicketId,
             amount: props.amount
           })
-        } else if (status.status === 'rejected' || status.status === 'declined') {
+        } else if (normalizedStatus === 'rejected' || normalizedStatus === 'declined') {
           currentStatus.value = 'rejected'
           rejectionReason.value = status.message || 'Tarjeta rechazada'
           displayStatus.value = '✗ Rechazado'
@@ -191,7 +269,7 @@ const startMonitoring = () => {
           setTimeout(() => {
             resetForNewAttempt()
           }, 3000)
-        } else if (status.status === 'processing') {
+        } else if (normalizedStatus === 'processing') {
           currentStatus.value = 'processing'
           displayStatus.value = 'Procesando...'
         }
@@ -199,7 +277,7 @@ const startMonitoring = () => {
     } catch (err) {
       console.warn('Error checking terminal payment status:', err)
     }
-  }, 1500)
+  }, 4000)
 
   // Contar tiempo hacia atrás
   timeoutInterval = setInterval(() => {
@@ -237,9 +315,10 @@ const resetForNewAttempt = () => {
 const cancelPayment = async () => {
   try {
     stopMonitoring()
-    if (orderId.value) {
-      await paymentMethodService.cancelPayment(orderId.value)
+    if (cartStore.currentSession?.payment_ticket_id) {
+      await paymentMethodService.cancelPayment(cartStore.currentSession.payment_ticket_id)
     }
+    cartStore.clearPaymentSession()
     emit('payment-cancelled')
     // Reset state
     orderInitialized.value = false
@@ -269,6 +348,14 @@ const formatTime = (seconds) => {
 
 // Ciclo de vida
 onMounted(() => {
+  if (canReuseActiveSession() && restoreSession()) {
+    return
+  }
+
+  if (cartStore.currentSession && !cartStore.isSessionActive) {
+    cartStore.clearPaymentSession()
+  }
+
   initializeTerminal()
 })
 

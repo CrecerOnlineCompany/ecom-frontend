@@ -2,8 +2,10 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCartStore } from '@/stores/cartStore'
 import { paymentService } from '@/services/paymentService'
+import { processPaymentErrorMessage } from '@/utils/errorHelpers'
 
 const STORAGE_KEY = 'cinea_checkout_form'
+const IDEMPOTENCY_STORAGE_KEY = 'cinea_checkout_idempotency'
 const BASE_PRICE = 8
 
 /**
@@ -28,7 +30,110 @@ export function useCheckoutForm() {
   const isRedirecting = ref(false)
   const error = ref('')
   const selectedPaymentMethod = ref(null)
+  const paymentMethodType = ref(null)
   const paymentProviders = ref([])
+  const orderExpiresAt = ref(null)
+  const showExpirationModal = ref(false)
+  const expirationCountdown = ref('00:00')
+  const idempotencyContext = ref(null)
+
+  const createIdempotencyKey = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+
+    return `ck-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  const loadIdempotencyContext = () => {
+    try {
+      const saved = localStorage.getItem(IDEMPOTENCY_STORAGE_KEY)
+      idempotencyContext.value = saved ? JSON.parse(saved) : null
+    } catch (err) {
+      console.error('Error loading checkout idempotency context:', err)
+      idempotencyContext.value = null
+    }
+  }
+
+  const saveIdempotencyContext = () => {
+    try {
+      if (!idempotencyContext.value) {
+        localStorage.removeItem(IDEMPOTENCY_STORAGE_KEY)
+        return
+      }
+      localStorage.setItem(IDEMPOTENCY_STORAGE_KEY, JSON.stringify(idempotencyContext.value))
+    } catch (err) {
+      console.error('Error saving checkout idempotency context:', err)
+    }
+  }
+
+  const clearIdempotencyContext = () => {
+    idempotencyContext.value = null
+    saveIdempotencyContext()
+  }
+
+  const normalizeSeatIds = (seatIds = []) => {
+    return [...seatIds].map(id => String(id)).sort()
+  }
+
+  const isSameSeatSelection = (left = [], right = []) => {
+    const a = normalizeSeatIds(left)
+    const b = normalizeSeatIds(right)
+    if (a.length !== b.length) return false
+    return a.every((value, index) => value === b[index])
+  }
+
+  const hasReusableSession = ({ screeningId, seatIds, providerId, methodType }) => {
+    const session = cartStore.currentSession
+    if (!session || !cartStore.isSessionActive) return false
+
+    const sameScreening = Number(session.screening_id) === Number(screeningId)
+    const sameProvider = Number(session.provider_id) === Number(providerId)
+    const sameMethod = String(session.payment_method || '') === String(methodType || '')
+    const sameSeats = isSameSeatSelection(session.seat_ids || [], seatIds)
+
+    return sameScreening && sameProvider && sameMethod && sameSeats
+  }
+
+  const getCartSignature = ({ screeningId, seatIds }) => {
+    return `${String(screeningId)}|${normalizeSeatIds(seatIds).join(',')}`
+  }
+
+  const ensureIdempotencyContext = ({ screeningId, seatIds, customerEmail }) => {
+    const signature = getCartSignature({ screeningId, seatIds })
+    const current = idempotencyContext.value
+    const sessionExpired = !!cartStore.currentSession && !cartStore.isSessionActive
+    const contextExpired =
+      !!current?.expires_at && new Date(current.expires_at).getTime() <= Date.now()
+    const cartChanged = !!current?.cart_signature && current.cart_signature !== signature
+    const screeningChanged = !!current && Number(current.screening_id) !== Number(screeningId)
+
+    if (sessionExpired || contextExpired || cartChanged || screeningChanged) {
+      if (cartStore.currentSession) {
+        cartStore.clearPaymentSession()
+      }
+      clearIdempotencyContext()
+    }
+
+    if (!idempotencyContext.value) {
+      idempotencyContext.value = {
+        idempotency_key: createIdempotencyKey(),
+        screening_id: screeningId,
+        cart_signature: signature,
+        customer_email: customerEmail || '',
+        created_at: new Date().toISOString(),
+        expires_at: null
+      }
+      saveIdempotencyContext()
+    }
+
+    if (!idempotencyContext.value.customer_email && customerEmail) {
+      idempotencyContext.value.customer_email = customerEmail
+      saveIdempotencyContext()
+    }
+
+    return idempotencyContext.value
+  }
 
   /**
    * Cargar datos del formulario desde localStorage
@@ -70,6 +175,7 @@ export function useCheckoutForm() {
         cardExpiry: '',
         cardCVC: '',
       }
+      clearIdempotencyContext()
     } catch (err) {
       console.error('Error clearing checkout form:', err)
     }
@@ -135,19 +241,49 @@ export function useCheckoutForm() {
    */
   const loadPaymentProviders = async () => {
     try {
-      const providers = await paymentService.getPaymentProviders()
-      paymentProviders.value = providers
+      const data = await paymentService.getPaymentProviders()
+      
+      // Extraer lista de proveedores según el formato
+      let providersList = []
+      if (Array.isArray(data)) {
+        providersList = data
+      } else if (data.providers && Array.isArray(data.providers)) {
+        providersList = data.providers
+      } else if (data.data && Array.isArray(data.data)) {
+        providersList = data.data
+      }
+      
+      // Normalizar booleanos
+      paymentProviders.value = providersList.map(p => ({
+        ...p,
+        requires_redirect: normalizeBoolean(p.requires_redirect),
+        supports_webhook: normalizeBoolean(p.supports_webhook),
+        is_active: normalizeBoolean(p.is_active)
+      }))
 
       // Auto-seleccionar si hay solo un método
-      if (providers.length === 1) {
-        selectedPaymentMethod.value = providers[0].id
+      if (paymentProviders.value.length === 1) {
+        selectedPaymentMethod.value = paymentProviders.value[0].id
       }
 
-      console.log('Filtered payment providers:', paymentProviders.value)
+      console.log('Loaded payment providers:', paymentProviders.value)
     } catch (err) {
       console.error('Error loading payment providers:', err)
       error.value = 'No se pudieron cargar los métodos de pago'
     }
+  }
+
+  /**
+   * Normalizar valores a boolean
+   */
+  const normalizeBoolean = (value) => {
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'string') {
+      const lower = String(value).toLowerCase()
+      return lower === 'true' || lower === '1' || lower === 'on' || lower === 'yes'
+    }
+    if (typeof value === 'number') return value !== 0
+    return !!value
   }
 
   /**
@@ -189,6 +325,8 @@ export function useCheckoutForm() {
       // Preparar request BATCH con TODOS los asientos
       const seatIds = cartStore.items.map(item => item.seat_id)
       const screeningId = cartStore.items[0]?.screening_id
+      const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
+      const requiresRedirect = !!provider?.requires_redirect
 
       if (!screeningId) {
         error.value = 'Error: falta la información de la sesión'
@@ -196,10 +334,44 @@ export function useCheckoutForm() {
         return
       }
 
+      const context = ensureIdempotencyContext({
+        screeningId,
+        seatIds,
+        customerEmail: form.value.email
+      })
+
+      if (
+        hasReusableSession({
+          screeningId,
+          seatIds,
+          providerId: selectedPaymentMethod.value,
+          methodType: paymentMethodType.value || 'redirect'
+        })
+      ) {
+        const session = cartStore.currentSession
+
+        if (requiresRedirect && session?.redirect_url) {
+          isRedirecting.value = true
+          setTimeout(() => {
+            window.location.href = session.redirect_url
+          }, 500)
+          return
+        }
+
+        error.value = `Ya existe una orden activa (${session?.order_number || 'N/A'}) para esta selección.`
+        isProcessing.value = false
+        return
+      }
+
       // Llenar valores por defecto si están vacíos
-      const customerEmail = form.value.email || 'default@gmail.com'
+      const customerEmail = context.customer_email || form.value.email || 'default@gmail.com'
       const customerName = form.value.name || 'default'
       const customerPhone = form.value.phone || '000000'
+
+      // Mantener email consistente durante reintentos del mismo checkout
+      if (form.value.email !== customerEmail) {
+        form.value.email = customerEmail
+      }
 
       const batchPaymentData = {
         screening_id: screeningId,
@@ -208,6 +380,10 @@ export function useCheckoutForm() {
         customer_email: customerEmail,
         customer_name: customerName,
         customer_phone: customerPhone,
+        additional_data: {
+          payment_method: paymentMethodType.value || 'redirect',
+          idempotency_key: context.idempotency_key,
+        },
       }
 
       // 🔍 DEBUGGING: Verificar datos enviados
@@ -217,18 +393,50 @@ export function useCheckoutForm() {
       console.log('Seat IDs:', seatIds)
       console.log('Seat IDs count:', seatIds.length)
       console.log('Expected total (items × $8):', cartStore.items.length * 8)
+      console.log('Payment Method Type:', paymentMethodType.value)
+      console.log('Selected Payment Provider ID:', selectedPaymentMethod.value)
       console.log('Sending BATCH payment request:', batchPaymentData)
       console.log('===========================')
 
       // Procesar TODOS los asientos en UN solo request (más eficiente)
       const paymentResponse = await paymentService.processBatchPayment(batchPaymentData)
 
-      console.log('Batch payment response:', paymentResponse)
+      console.log('✅ Batch payment response received:', paymentResponse)
 
       if (!paymentResponse || !paymentResponse.success) {
-        error.value = paymentResponse?.message || 'Error al procesar el pago. Intenta de nuevo.'
+        // Procesar mensaje de error con función helper
+        error.value = processPaymentErrorMessage(paymentResponse?.message)
         isProcessing.value = false
         return
+      }
+
+      // Capturar información de expiración de la orden
+      if (paymentResponse.reserved_until) {
+        orderExpiresAt.value = new Date(paymentResponse.reserved_until)
+        showExpirationModal.value = true
+        startExpirationCountdown()
+
+        idempotencyContext.value = {
+          ...context,
+          screening_id: screeningId,
+          cart_signature: getCartSignature({ screeningId, seatIds }),
+          customer_email: customerEmail,
+          expires_at: paymentResponse.reserved_until
+        }
+        saveIdempotencyContext()
+
+        cartStore.setPaymentSession({
+          order_id: paymentResponse.order_id,
+          order_number: paymentResponse.order_number,
+          reserved_until: paymentResponse.reserved_until,
+          payment_ticket_id: paymentResponse.payment_ticket_id,
+          payment_method: paymentMethodType.value || 'redirect',
+          provider_id: selectedPaymentMethod.value,
+          screening_id: screeningId,
+          seat_ids: seatIds,
+          idempotency_key: context.idempotency_key,
+          redirect_url: paymentResponse.redirect_url || null
+        })
       }
 
       // 🔍 DEBUGGING: Verificar respuesta del backend
@@ -251,7 +459,6 @@ export function useCheckoutForm() {
       }
 
       // Verificar si requiere redirección
-      const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
       const redirectUrl = paymentResponse.redirect_url
 
       console.log(`Batch payment successful! Processed ${paymentResponse.tickets_count} tickets with total: $${paymentResponse.total_price}`)
@@ -280,14 +487,61 @@ export function useCheckoutForm() {
     }
   }
 
+  /**
+   * Iniciar cuenta regresiva para expiración de la orden
+   */
+  const startExpirationCountdown = () => {
+    if (!orderExpiresAt.value) return
+
+    const updateCountdown = () => {
+      const now = new Date()
+      const diff = orderExpiresAt.value - now
+
+      if (diff <= 0) {
+        expirationCountdown.value = '00:00'
+        showExpirationModal.value = false
+        error.value = 'La orden ha expirado. Por favor intenta de nuevo.'
+        return
+      }
+
+      const minutes = Math.floor(diff / 60000)
+      const seconds = Math.floor((diff % 60000) / 1000)
+      expirationCountdown.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    }
+
+    updateCountdown()
+    const interval = setInterval(updateCountdown, 1000)
+
+    // Limpiar interval cuando cierre el modal
+    const checkInterval = setInterval(() => {
+      if (!showExpirationModal.value) {
+        clearInterval(interval)
+        clearInterval(checkInterval)
+      }
+    }, 1000)
+  }
+
+  /**
+   * Cerrar modal de expiración
+   */
+  const closeExpirationModal = () => {
+    showExpirationModal.value = false
+  }
+
+  loadIdempotencyContext()
+
   return {
     form,
     isProcessing,
     isRedirecting,
     error,
     selectedPaymentMethod,
+    paymentMethodType,
     paymentProviders,
     subtotal,
+    orderExpiresAt,
+    showExpirationModal,
+    expirationCountdown,
     loadFormData,
     saveFormData,
     clearFormData,
@@ -298,5 +552,6 @@ export function useCheckoutForm() {
     loadPaymentProviders,
     goBack,
     processPayment,
+    closeExpirationModal,
   }
 }

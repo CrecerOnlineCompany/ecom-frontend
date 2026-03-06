@@ -1,5 +1,37 @@
 <template>
   <div class="checkout-page">
+    <!-- Order Expiration Modal -->
+    <div v-if="showExpirationModal" class="modal-overlay">
+      <div class="modal-content expiration-modal">
+        <div class="modal-header">
+          <h2>⏰ Tiempo de Expiración de la Orden</h2>
+        </div>
+        <div class="modal-body">
+          <div class="expiration-info">
+            <p class="expiration-message">Tu orden expirará en:</p>
+            <div class="countdown-timer">
+              <span class="countdown-value">{{ expirationCountdown }}</span>
+              <span class="countdown-label">minutos:segundos</span>
+            </div>
+            <p class="expiration-details">
+              Completa tu pago antes de que la orden expire.
+              Una vez expirada, deberás seleccionar tus asientos nuevamente.
+            </p>
+            <div class="order-details">
+              <p><strong>Número de Orden:</strong> {{ orderExpiresAt ? 'Procesando...' : 'N/A' }}</p>
+              <p><strong>Asientos Reservados:</strong> {{ cartStore.items.length }}</p>
+              <p><strong>Total a Pagar:</strong> ${{ cartStore.totalPrice.toFixed(2) }}</p>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="closeExpirationModal" class="btn btn-primary">
+            Entendido, Continuar
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Loader especial de redirección -->
     <div v-if="isRedirecting" class="redirect-loader-overlay">
       <div class="redirect-loader-content">
@@ -10,6 +42,23 @@
         </div>
         <h2>Redirigiendo al sistema de pago...</h2>
         <p>Por favor espera mientras te redirigimos a nuestro procesador de pagos seguro.</p>
+      </div>
+    </div>
+
+    <!-- Active Session Alert -->
+    <div v-if="sessionActive" class="active-session-alert">
+      <div class="alert-content">
+        <h3>⚠️ Orden Activa ({{ currentSession.order_number }})</h3>
+        <p>Tienes una orden en proceso. Completa o cancela antes de continuar.</p>
+      </div>
+    </div>
+
+    <!-- Screening Mismatch Warning -->
+    <div v-if="screeningMismatch" class="screening-mismatch-alert">
+      <div class="alert-content">
+        <h3>❌ Película Diferente Detectada</h3>
+        <p>La orden activa es para otra función. Reinicia para cambiar de película.</p>
+        <button @click="handleRestartOrder" class="btn btn-danger">Empezar de Nuevo</button>
       </div>
     </div>
 
@@ -58,7 +107,12 @@
             </div>
           </div>
 
-          <button @click="goBack" class="btn btn-secondary">
+          <button 
+            @click="goBack" 
+            class="btn btn-secondary"
+            :disabled="sessionActive"
+            :title="sessionActive ? 'Orden activa: completa o reinicia' : ''"
+          >
             Modificar Asientos
           </button>
         </div>
@@ -77,7 +131,9 @@
           <div v-if="selectedPaymentMethod && isMercadoPago" class="payment-variant-section">
             <h3>Selecciona cómo pagar con Mercado Pago</h3>
             <div class="variant-options">
+              <!-- QR Option - Only show if configured -->
               <div
+                v-if="hasQRSupport"
                 :class="['variant-option', { active: paymentMethodType === 'qr' }]"
                 @click="paymentMethodType = 'qr'"
               >
@@ -85,7 +141,10 @@
                 <h4>Código QR</h4>
                 <p>Escanea con tu teléfono</p>
               </div>
+              
+              <!-- Terminal Smart Point Option - Only show if configured -->
               <div
+                v-if="hasTerminalSupport"
                 :class="['variant-option', { active: paymentMethodType === 'terminal' }]"
                 @click="paymentMethodType = 'terminal'"
               >
@@ -93,7 +152,10 @@
                 <h4>Terminal Smart Point</h4>
                 <p>Acerca tu tarjeta</p>
               </div>
+              
+              <!-- Only show redirect option if provider requires it -->
               <div
+                v-if="paymentMethodRequiresRedirect"
                 :class="['variant-option', { active: paymentMethodType === 'redirect' }]"
                 @click="paymentMethodType = 'redirect'"
               >
@@ -104,7 +166,7 @@
             </div>
           </div>
 
-          <form @submit.prevent="processPayment">
+          <div class="payment-form-content">
             <!-- Personal Information -->
             <fieldset class="form-section">
               <legend>Datos Personales</legend>
@@ -144,7 +206,7 @@
 
             <!-- QR Payment -->
             <QRPaymentCard
-              v-if="selectedPaymentMethod && paymentMethodType === 'qr'"
+              v-if="selectedPaymentMethod && paymentMethodType === 'qr' && hasQRSupport"
               :payment-provider-id="selectedPaymentMethod"
               :amount="cartStore.totalPrice"
               :screening-id="selectedScreeningId"
@@ -158,7 +220,7 @@
 
             <!-- Terminal Smart Point Payment -->
             <SmartPointCard
-              v-else-if="selectedPaymentMethod && paymentMethodType === 'terminal'"
+              v-else-if="selectedPaymentMethod && paymentMethodType === 'terminal' && hasTerminalSupport"
               :payment-provider-id="selectedPaymentMethod"
               :amount="cartStore.totalPrice"
               :screening-id="selectedScreeningId"
@@ -170,8 +232,8 @@
               @payment-cancelled="handlePaymentCancelled"
             />
 
-            <!-- Card Information - Only for non-redirect methods -->
-            <fieldset v-else-if="selectedPaymentMethod && !paymentMethodRequiresRedirect && paymentMethodType !== 'qr' && paymentMethodType !== 'terminal'" class="form-section">
+            <!-- Card Information - Only for non-redirect, non-mercado pago methods -->
+            <fieldset v-else-if="selectedPaymentMethod && !isMercadoPago && !paymentMethodRequiresRedirect && paymentMethodType !== 'qr' && paymentMethodType !== 'terminal'" class="form-section">
               <legend>Tarjeta de Crédito</legend>
 
               <div class="form-group">
@@ -228,34 +290,10 @@
               </div>
             </div>
 
-            <!-- Terms -->
-            <div class="form-group checkbox">
-              <input
-                id="terms"
-                v-model="form.acceptTerms"
-                type="checkbox"
-                required
-              >
-              <label for="terms">
-                Acepto los términos y condiciones de compra
-              </label>
-            </div>
-
-            <!-- Actions -->
-            <div class="form-actions">
-              <button
-                type="submit"
-                :disabled="isProcessing || !selectedPaymentMethod"
-                class="btn btn-primary"
-              >
-                {{ isProcessing ? 'Procesando...' : `Pagar $${cartStore.totalPrice.toFixed(2)}` }}
-              </button>
-            </div>
-
             <p v-if="error" class="error-message">
               {{ error }}
             </p>
-          </form>
+          </div>
         </div>
       </div>
     </div>
@@ -281,8 +319,12 @@ const {
   isRedirecting,
   error,
   selectedPaymentMethod,
+  paymentMethodType,
   paymentProviders,
   subtotal,
+  orderExpiresAt,
+  showExpirationModal,
+  expirationCountdown,
   loadFormData,
   saveFormData,
   clearFormData,
@@ -292,10 +334,18 @@ const {
   loadPaymentProviders,
   goBack,
   processPayment,
+  closeExpirationModal,
 } = useCheckoutForm()
 
-// Extender refs para los nuevos métodos de pago
-const paymentMethodType = ref(null) // 'qr', 'terminal', 'redirect', null
+// Payment Session Validation
+const sessionActive = computed(() => cartStore.isSessionActive)
+const currentSession = computed(() => cartStore.currentSession)
+
+// Validar que el screening actual coincida con la sesión
+const screeningMismatch = computed(() => {
+  if (!sessionActive.value || !currentSession.value) return false
+  return currentSession.value.screening_id !== selectedScreeningId.value
+})
 
 const selectedPaymentMethodName = computed(() => {
   const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
@@ -304,8 +354,21 @@ const selectedPaymentMethodName = computed(() => {
 
 const paymentMethodRequiresRedirect = computed(() => {
   const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
-  return provider?.requires_redirect || false
+  return normalizeBoolean(provider?.requires_redirect) ?? false
 })
+
+/**
+ * Normalizar valores a boolean (maneja strings, números, etc.)
+ */
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const lower = String(value).toLowerCase()
+    return lower === 'true' || lower === '1' || lower === 'on' || lower === 'yes'
+  }
+  if (typeof value === 'number') return value !== 0
+  return !!value
+}
 
 /**
  * Determinar si es Mercado Pago
@@ -313,6 +376,22 @@ const paymentMethodRequiresRedirect = computed(() => {
 const isMercadoPago = computed(() => {
   const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
   return provider?.name?.toLowerCase().includes('mercado') || false
+})
+
+/**
+ * Verificar si QR está disponible en el provider
+ */
+const hasQRSupport = computed(() => {
+  const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
+  return provider?.qr?.enabled === true || false
+})
+
+/**
+ * Verificar si Terminal SmartPoint está disponible en el provider
+ */
+const hasTerminalSupport = computed(() => {
+  const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
+  return provider?.smartPoint?.enabled === true || false
 })
 
 /**
@@ -330,8 +409,15 @@ const determinePaymentMethodType = () => {
     // No asignar automáticamente, dejar que el usuario seleccione
     if (!paymentMethodType.value) {
       paymentMethodType.value = null
+    } else {
+      // Validar que la opción seleccionada está disponible
+      if (paymentMethodType.value === 'qr' && !hasQRSupport.value) {
+        paymentMethodType.value = null
+      } else if (paymentMethodType.value === 'terminal' && !hasTerminalSupport.value) {
+        paymentMethodType.value = null
+      }
     }
-  } else if (provider.requires_redirect) {
+  } else if (normalizeBoolean(provider.requires_redirect)) {
     paymentMethodType.value = 'redirect'
   } else {
     paymentMethodType.value = 'card'
@@ -339,6 +425,24 @@ const determinePaymentMethodType = () => {
 
   console.log('Payment method type determined:', paymentMethodType.value, 'Provider:', provider)
 }
+
+/**
+ * Verificar si el formulario de pago está listo para procesar
+ */
+const isPaymentFormReady = computed(() => {
+  // Validación básica: método de pago y email
+  if (!selectedPaymentMethod.value || !form.value.email) {
+    return false
+  }
+
+  // Si es Mercado Pago, debe tener un tipo de pago seleccionado
+  if (isMercadoPago.value) {
+    return paymentMethodType.value !== null && ['qr', 'terminal', 'redirect'].includes(paymentMethodType.value)
+  }
+
+  // Para otros métodos
+  return true
+})
 
 /**
  * ID de screening y seat_ids del carrito
@@ -358,10 +462,16 @@ const seatIds = computed(() => {
  */
 const handleQRPaymentSuccess = async (paymentData) => {
   console.log('QR Payment successful:', paymentData)
-  // Redirigir a confirmación
+  const ticket = paymentData?.paymentTicketId || currentSession.value?.payment_ticket_id
+  if (!ticket) {
+    error.value = 'No se pudo obtener el identificador del pago confirmado.'
+    return
+  }
+  const orderNumber = currentSession.value?.order_number || undefined
+
   await router.push({
     name: 'PaymentSuccess',
-    params: { transactionId: paymentData.paymentTicketId }
+    query: { ticket, ...(orderNumber ? { order: orderNumber } : {}) }
   })
 }
 
@@ -370,10 +480,20 @@ const handleQRPaymentSuccess = async (paymentData) => {
  */
 const handleTerminalPaymentSuccess = async (paymentData) => {
   console.log('Terminal Payment successful:', paymentData)
-  // Redirigir a confirmación
+  const ticket =
+    paymentData?.paymentTicketId ||
+    currentSession.value?.payment_ticket_id ||
+    paymentData?.orderId
+
+  if (!ticket) {
+    error.value = 'No se pudo obtener el identificador del pago confirmado.'
+    return
+  }
+  const orderNumber = currentSession.value?.order_number || undefined
+
   await router.push({
     name: 'PaymentSuccess',
-    params: { transactionId: paymentData.orderId }
+    query: { ticket, ...(orderNumber ? { order: orderNumber } : {}) }
   })
 }
 
@@ -394,6 +514,46 @@ const handlePaymentCancelled = () => {
   // Resetear el método seleccionado
   selectedPaymentMethod.value = null
   paymentMethodType.value = null
+}
+
+const persistCancelSnapshot = (cancelResponse, orderNumber) => {
+  try {
+    localStorage.setItem('cinea_last_cancel_response', JSON.stringify({
+      at: new Date().toISOString(),
+      order_number: orderNumber,
+      response: cancelResponse
+    }))
+  } catch (err) {
+    console.warn('Error saving cancel snapshot:', err)
+  }
+}
+
+/**
+ * Manejar reinicio de orden
+ */
+const handleRestartOrder = async () => {
+  if (!currentSession.value?.order_number) {
+    return
+  }
+
+  try {
+    const { paymentMethodService } = await import('@/services/PaymentMethodService')
+    const cancelResponse = await paymentMethodService.cancelOrderByNumber(currentSession.value.order_number)
+
+    if (cancelResponse?.success) {
+      cartStore.resetAll()
+      router.push('/')
+      return
+    }
+
+    persistCancelSnapshot(cancelResponse, currentSession.value.order_number)
+    cartStore.resetAll()
+    error.value = cancelResponse?.message || 'No se pudo cancelar la orden.'
+    router.push('/')
+  } catch (err) {
+    console.warn('Error cancelling payment during restart:', err)
+    error.value = 'No se pudo cancelar la orden en este momento.'
+  }
 }
 
 onMounted(async () => {
@@ -436,6 +596,49 @@ const removeItemFromCart = (itemId) => {
   font-size: 2.5rem;
   color: var(--primary);
   margin-bottom: 2rem;
+}
+
+/* Alert Styles */
+.active-session-alert,
+.screening-mismatch-alert {
+  background: rgba(59, 130, 246, 0.1);
+  border-left: 4px solid var(--primary);
+  padding: 1rem;
+  margin: 0 auto 2rem auto;
+  border-radius: 4px;
+  max-width: 1200px;
+}
+
+.screening-mismatch-alert {
+  background: rgba(239, 68, 68, 0.1);
+  border-left-color: #ef4444;
+}
+
+.alert-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.alert-content h3 {
+  margin: 0;
+  color: var(--primary);
+  font-size: 1rem;
+}
+
+.screening-mismatch-alert h3 {
+  color: #ef4444;
+}
+
+.alert-content p {
+  margin: 0;
+  color: #ccc;
+  font-size: 0.9rem;
+}
+
+.alert-content .btn {
+  margin-left: auto;
+  flex: 0;
 }
 
 .checkout-layout {
@@ -1129,5 +1332,129 @@ const removeItemFromCart = (itemId) => {
     padding: 0.6rem;
     font-size: 0.8rem;
   }
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--bg-secondary);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-xl);
+  max-width: 500px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(-50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--gray-darker);
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: var(--primary);
+  font-size: 1.5rem;
+}
+
+.modal-body {
+  padding: 2rem 1.5rem;
+}
+
+.modal-footer {
+  padding: 1.5rem;
+  border-top: 1px solid var(--gray-darker);
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.expiration-modal .modal-body {
+  text-align: center;
+}
+
+.expiration-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.expiration-message {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.countdown-timer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(16, 185, 129, 0.1));
+  border-radius: var(--border-radius);
+  border: 2px solid var(--primary);
+}
+
+.countdown-value {
+  font-size: 3rem;
+  font-weight: bold;
+  color: var(--primary);
+  font-family: 'Courier New', monospace;
+  line-height: 1;
+}
+
+.countdown-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.expiration-details {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.order-details {
+  background: var(--gray-dark);
+  padding: 1rem;
+  border-radius: var(--border-radius-sm);
+  text-align: left;
+}
+
+.order-details p {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.order-details p strong {
+  color: var(--primary);
 }
 </style>

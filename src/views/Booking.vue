@@ -50,16 +50,17 @@
                 :key="rowIndex"
                 class="seat-row "
               >
-                <div class="row-label">{{ row[0]?.seat_code?.charAt(0) || String.fromCharCode(65 + rowIndex) }}</div>
+                <div class="row-label">{{ getRowLabel(row, rowIndex) }}</div>
                 <div class="row-seats">
                   <div
                     v-for="seat in row"
                     :key="seat.id"
                     :class="['seat', getSeatClass(seat)]"
                     @click="toggleSeat(seat)"
-                    :title="`Asiento ${seat.seat_code || seat.row + seat.seat_number}`"
+                    :title="`Asiento ${getSeatCode(seat)}`"
                   >
-                    <span v-if="!isOccupied(seat)" class="seat-number">
+                    <span v-if="isBlocked(seat)" class="occupied-icon">⛔</span>
+                    <span v-else-if="isSelected(seat) || !isOccupied(seat)" class="seat-number">
                       {{ seat.seat_number }}
                     </span>
                     <span v-else class="occupied-icon">✗</span>
@@ -81,6 +82,10 @@
               <div class="legend-item">
                 <div class="seat occupied"></div>
                 <span>Ocupado</span>
+              </div>
+              <div class="legend-item">
+                <div class="seat blocked"></div>
+                <span>Bloqueado</span>
               </div>
             </div>
           </div>
@@ -175,6 +180,23 @@ const seatsLoading = ref(false)
 const movieTitle = ref('')
 const basePrice = 8
 
+const parseSeatLabel = (seatLabel = '') => {
+  const normalized = String(seatLabel).trim().toUpperCase()
+  const match = normalized.match(/^([A-Z]+)(\d+)$/)
+  if (!match) return null
+
+  const rowLetters = match[1]
+  const seatNumber = Number(match[2])
+  const rowNumber = rowLetters
+    .split('')
+    .reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0)
+
+  return {
+    row_number: rowNumber || 1,
+    seat_number: Number.isNaN(seatNumber) ? 1 : seatNumber
+  }
+}
+
 onMounted(async () => {
   await loadScreeningData()
   // Restaurar asientos seleccionados desde el carrito
@@ -191,18 +213,37 @@ const restoreSelectedSeatsFromCart = () => {
   }
 
   // Obtener los seat_id del carrito para esta screening
-  const screeningId = parseInt(route.params.id)
+  const screeningId = Number(route.params.id)
   const cartSeatsInThisScreening = cartStore.items.filter(
-    item => item.screening_id === screeningId
+    item => Number(item.screening_id) === screeningId
   )
 
   if (cartSeatsInThisScreening.length === 0) {
     return
   }
 
-  // Restaurar los asientos seleccionados
-  selectedSeats.value = seats.value.filter(seat => {
-    return cartSeatsInThisScreening.some(cartItem => cartItem.seat_id === seat.id)
+  // Restaurar los asientos seleccionados aunque la API no los devuelva
+  selectedSeats.value = cartSeatsInThisScreening
+    .map(cartItem => {
+      const cartSeatId = Number(cartItem.seat_id ?? cartItem.id)
+      const seatFromApi = seats.value.find(seat => Number(seat.id) === cartSeatId)
+      if (seatFromApi) return seatFromApi
+
+      const parsedSeat = parseSeatLabel(cartItem.seat_label)
+      return {
+        id: cartSeatId,
+        row_number: parsedSeat?.row_number || 1,
+        seat_number: parsedSeat?.seat_number || 1,
+        seat_code: cartItem.seat_label || undefined,
+        status: 'reserved'
+      }
+    })
+    .filter((seat, index, allSeats) => {
+      return allSeats.findIndex(item => Number(item.id) === Number(seat.id)) === index
+    })
+
+  selectedSeats.value = selectedSeats.value.filter(seat => {
+    return cartSeatsInThisScreening.some(cartItem => Number(cartItem.seat_id ?? cartItem.id) === Number(seat.id))
   })
 
   console.log(`Restored ${selectedSeats.value.length} selected seats from cart`)
@@ -261,7 +302,27 @@ const loadSeats = async () => {
 
 const seatsByRow = computed(() => {
   const rows = {}
-  seats.value.forEach(seat => {
+  const mergedSeats = [...seats.value]
+  const existingCoordinates = new Set(
+    seats.value.map(seat => `${Number(seat.row_number || seat.row || 1)}-${Number(seat.seat_number || 0)}`)
+  )
+
+  // El endpoint trae solo asientos disponibles; agregar seleccionados para poder renderizarlos.
+  selectedSeats.value.forEach(seat => {
+    const rowNum = Number(seat.row_number || seat.row || 1)
+    const seatNum = Number(seat.seat_number || 0)
+    const coordinate = `${rowNum}-${seatNum}`
+    if (!existingCoordinates.has(coordinate)) {
+      mergedSeats.push({
+        ...seat,
+        row_number: rowNum,
+        seat_number: seatNum
+      })
+      existingCoordinates.add(coordinate)
+    }
+  })
+
+  mergedSeats.forEach(seat => {
     const rowNum = seat.row_number || seat.row || 1
     if (!rows[rowNum]) {
       rows[rowNum] = []
@@ -269,26 +330,68 @@ const seatsByRow = computed(() => {
     rows[rowNum].push(seat)
   })
 
-  // Ordenar por número de fila y luego cada fila por número de asiento
+  // Completar estructura: si faltan números de asiento en una fila, se renderizan como bloqueados.
   return Object.keys(rows)
     .sort((a, b) => Number(a) - Number(b))
-    .map(rowNum => rows[rowNum].sort((a, b) => (a.seat_number || 0) - (b.seat_number || 0)))
+    .map(rowNum => {
+      const rowSeats = rows[rowNum].sort((a, b) => (a.seat_number || 0) - (b.seat_number || 0))
+      const maxSeatNumber = Math.max(...rowSeats.map(seat => Number(seat.seat_number || 0)), 6)
+      const seatsByNumber = new Map(rowSeats.map(seat => [Number(seat.seat_number), seat]))
+      const filledRow = []
+
+      for (let seatNumber = 1; seatNumber <= maxSeatNumber; seatNumber += 1) {
+        const currentSeat = seatsByNumber.get(seatNumber)
+        if (currentSeat) {
+          filledRow.push(currentSeat)
+          continue
+        }
+
+        filledRow.push({
+          id: `blocked-${rowNum}-${seatNumber}`,
+          row_number: Number(rowNum),
+          seat_number: seatNumber,
+          status: 'blocked',
+          is_available: false,
+          is_placeholder: true
+        })
+      }
+
+      return filledRow
+    })
 })
 
 const isOccupied = (seat) => {
-  // Si el asiento tiene status, usarlo, sino asumir que está disponible
-  // ya que getAvailableSeats solo devuelve asientos disponibles
-  return seat.status === 'occupied' || seat.is_available === false || false
+  const status = String(seat.status || '').toLowerCase()
+  return status === 'occupied' || status === 'reserved' || status === 'sold' || status === 'unavailable'
+}
+
+const isBlocked = (seat) => {
+  const status = String(seat.status || '').toLowerCase()
+  return status === 'blocked' || seat.is_available === false || seat.is_placeholder === true
 }
 
 const isSelected = (seat) => {
-  return selectedSeats.value.some(s => s.id === seat.id)
+  return selectedSeats.value.some(s => Number(s.id) === Number(seat.id))
 }
 
 const getSeatClass = (seat) => {
-  if (isOccupied(seat)) return 'occupied'
   if (isSelected(seat)) return 'selected'
+  if (isBlocked(seat)) return 'blocked'
+  if (isOccupied(seat)) return 'occupied'
   return 'available'
+}
+
+const getSeatCode = (seat) => {
+  if (seat.seat_code) return seat.seat_code
+  const rowNumber = Number(seat.row_number || seat.row || 1)
+  return `${String.fromCharCode(64 + rowNumber)}${seat.seat_number || ''}`
+}
+
+const getRowLabel = (row, rowIndex) => {
+  const seatWithCode = row.find(seat => seat.seat_code)
+  if (seatWithCode?.seat_code) return seatWithCode.seat_code.charAt(0)
+  const rowNumber = Number(row[0]?.row_number || rowIndex + 1)
+  return String.fromCharCode(64 + rowNumber)
 }
 
 const getSeatPrice = (seat) => {
@@ -298,19 +401,18 @@ const getSeatPrice = (seat) => {
 const toggleSeat = (seat) => {
   console.log('Toggle seat clicked:', seat)
   console.log('Is occupied:', isOccupied(seat))
-  
-  if (isOccupied(seat)) {
-    console.log('Seat is occupied, cannot select')
-    return
-  }
 
-  const index = selectedSeats.value.findIndex(s => s.id === seat.id)
+  const index = selectedSeats.value.findIndex(s => Number(s.id) === Number(seat.id))
   if (index > -1) {
     console.log('Removing seat from selection')
     selectedSeats.value.splice(index, 1)
     // También remover del carrito si existe
     cartStore.removeItem(seat.id)
   } else {
+    if (isOccupied(seat) || isBlocked(seat)) {
+      console.log('Seat is unavailable, cannot select')
+      return
+    }
     console.log('Adding seat to selection')
     selectedSeats.value.push(seat)
   }
@@ -516,6 +618,16 @@ const formatTime = (dateTimeString) => {
   color: #999;
   cursor: not-allowed;
   opacity: 0.5;
+  pointer-events: none;
+}
+
+.seat.blocked {
+  background: #3d3d3d;
+  border-color: #4a4a4a;
+  color: #888;
+  cursor: not-allowed;
+  opacity: 0.75;
+  pointer-events: none;
 }
 
 .occupied-icon {

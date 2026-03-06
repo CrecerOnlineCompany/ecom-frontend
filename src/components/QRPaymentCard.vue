@@ -17,21 +17,26 @@
     <!-- Success State - QR Generated -->
     <div v-else-if="qrData && !paymentCompleted" class="qr-state qr-generated">
       <!-- Ticket Display with Instructions -->
-      <PaymentTicketDisplay
-        :ticket-number="paymentTicketId"
-        :amount="amount"
-        payment-method="qr"
-        :status-text="monitoring ? `Esperando confirmación... ${formatTime(timeoutSeconds)}` : 'Escanea el código QR con tu celular'"
-      />
+
 
       <!-- QR Code Container -->
       <div class="qr-instruction-section">
         <h3>Código QR</h3>
         <div class="qr-container">
-          <div id="qr-canvas" class="qr-canvas"></div>
+          <img 
+            v-if="qrImageUrl" 
+            :src="qrImageUrl" 
+            alt="QR Code" 
+            class="qr-image"
+          />
         </div>
       </div>
-
+      <PaymentTicketDisplay
+        :ticket-number="paymentTicketId"
+        :amount="amount"
+        payment-method="qr"
+        :status-text="monitoring ? `Esperando confirmación... ${formatTime(effectiveTimeoutSeconds)}` : 'Escanea el código QR con tu celular'"
+      />
       <!-- Instructions -->
       <div class="qr-instructions">
         <h4>Cómo Pagar:</h4>
@@ -43,17 +48,6 @@
         </ol>
       </div>
 
-      <!-- Payment Info -->
-      <div class="payment-info">
-        <div class="info-row">
-          <span class="label">Monto a pagar:</span>
-          <span class="value">${{ amount.toFixed(2) }}</span>
-        </div>
-        <div class="info-row">
-          <span class="label">ID Transacción:</span>
-          <span class="value mono">{{ paymentTicketId }}</span>
-        </div>
-      </div>
 
       <!-- Monitoring Status -->
       <div v-if="monitoring" class="monitoring-status">
@@ -62,8 +56,8 @@
           <span>Esperando confirmación...</span>
         </div>
         <div class="status-timer">
-          <span v-if="timeoutSeconds > 0">
-            {{ formatTime(timeoutSeconds) }} segundos restantes
+          <span v-if="effectiveTimeoutSeconds > 0">
+            {{ formatTime(effectiveTimeoutSeconds) }} segundos restantes
           </span>
           <span v-else class="expired">
             Tiempo expirado
@@ -79,12 +73,6 @@
           :disabled="isDownloading"
         >
           {{ isDownloading ? 'Descargando...' : '⬇️ Descargar QR' }}
-        </button>
-        <button
-          @click="copyQRData"
-          class="btn btn-secondary"
-        >
-          📋 Copiar Datos
         </button>
         <button
           @click="cancelPayment"
@@ -122,7 +110,11 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { paymentMethodService } from '@/services/PaymentMethodService'
+import { useCartStore } from '@/stores/cartStore'
+import { processPaymentErrorMessage } from '@/utils/errorHelpers'
 import PaymentTicketDisplay from '@/components/PaymentTicketDisplay.vue'
+
+const cartStore = useCartStore()
 
 const props = defineProps({
   paymentProviderId: {
@@ -161,6 +153,7 @@ const emit = defineEmits(['payment-success', 'payment-error', 'payment-cancelled
 const isLoading = ref(false)
 const error = ref(null)
 const qrData = ref(null)
+const qrImageUrl = ref(null)
 const paymentTicketId = ref(null)
 const paymentCompleted = ref(false)
 const monitoring = ref(false)
@@ -169,6 +162,76 @@ const showCopyTooltip = ref(false)
 const timeoutSeconds = ref(props.timeoutDuration)
 let monitoringInterval = null
 let timeoutInterval = null
+
+const hasSessionCountdown = computed(() => {
+  const session = cartStore.currentSession
+  return !!(
+    session?.reserved_until &&
+    session?.payment_ticket_id &&
+    session.payment_ticket_id === paymentTicketId.value
+  )
+})
+
+const effectiveTimeoutSeconds = computed(() => {
+  return hasSessionCountdown.value ? cartStore.secondsRemaining : timeoutSeconds.value
+})
+
+const normalizeSeatIds = (seatIds = []) => [...seatIds].map(id => String(id)).sort()
+
+const isSameSeatSelection = (left = [], right = []) => {
+  const a = normalizeSeatIds(left)
+  const b = normalizeSeatIds(right)
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+const canReuseActiveSession = () => {
+  const session = cartStore.currentSession
+  if (!session || !cartStore.isSessionActive) return false
+
+  const sameMethod = session.payment_method === 'qr'
+  const sameProvider = Number(session.provider_id) === Number(props.paymentProviderId)
+  const sameScreening = Number(session.screening_id) === Number(props.screeningId)
+  const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+  const hasTicket = !!session.payment_ticket_id
+  const hasQrData = !!session.qr_data
+
+  return sameMethod && sameProvider && sameScreening && sameSeats && hasTicket && hasQrData
+}
+
+const restoreSession = () => {
+  const session = cartStore.currentSession
+  if (!session) return false
+
+  paymentTicketId.value = session.payment_ticket_id
+  qrData.value = {
+    method: 'qr',
+    qr_data: session.qr_data,
+    amount: props.amount,
+    reference: session.payment_ticket_id
+  }
+  qrImageUrl.value = session.qr_data
+  startMonitoring()
+  return true
+}
+
+const normalizePaymentStatus = (statusResponse) => {
+  const rawStatus = statusResponse?.status
+  return typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : ''
+}
+
+const extractBackendError = (err) => {
+  const payload = err?.response?.data || err?.backend || null
+  const code = payload?.error_code || err?.code || null
+  const message = payload?.message || err?.message || 'No se pudo iniciar el pago QR'
+  const hasBackendResponse = !!payload || !!code
+
+  return {
+    code,
+    message,
+    hasBackendResponse
+  }
+}
 
 /**
  * Generar código QR
@@ -183,33 +246,52 @@ const generateQR = async () => {
       payment_provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
-      total_price: props.amount,
-      seat_count: props.seatIds.length,
-      customer_email: props.customerEmail,
-      customer_name: props.customerName
+      customer_email: props.customerEmail || 'default@gmail.com',
+      customer_name: props.customerName || 'default'
     })
 
     if (!response || !response.success) {
       throw new Error(response?.message || 'Error procesando pago QR')
     }
 
+    // Guardar sesión de pago en cartStore
+    cartStore.setPaymentSession({
+      order_id: response.order_id,
+      order_number: response.order_number,
+      reserved_until: response.reserved_until,
+      payment_ticket_id: response.payment_ticket_id,
+      payment_method: 'qr',
+      provider_id: props.paymentProviderId,
+      screening_id: props.screeningId,
+      seat_ids: props.seatIds,
+      qr_data: response.qr_data
+    })
+
     // Guardar datos del pago
     paymentTicketId.value = response.payment_ticket_id
     qrData.value = {
-      method: response.method,
+      method: 'qr',
       qr_data: response.qr_data,
       amount: props.amount,
       reference: paymentTicketId.value
     }
 
-    // Generar código QR visual
-    await paymentMethodService.generateQRCode(qrData.value, 'qr-canvas')
+    // Usar URL de imagen del QR del backend
+    qrImageUrl.value = response.qr_data
+    console.log('QR Image URL:', qrImageUrl.value)
 
     // Iniciar monitoreo
     startMonitoring()
   } catch (err) {
     console.error('Error generating QR:', err)
-    
+    const backendError = extractBackendError(err)
+
+    if (backendError.hasBackendResponse) {
+      error.value = processPaymentErrorMessage(backendError.message)
+      emit('payment-error', error.value)
+      return
+    }
+
     // Fallback: Permitir funcionalidad sin backend
     // Generar un ID local si el backend no responde
     paymentTicketId.value = `QR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -224,13 +306,8 @@ const generateQR = async () => {
       reference: paymentTicketId.value
     }
 
-    // Intentar generar QR de todas formas
-    try {
-      await paymentMethodService.generateQRCode(qrData.value, 'qr-canvas')
-    } catch (qrErr) {
-      console.warn('No se pudo generar QR visual:', qrErr)
-      // Continuar sin QR visual
-    }
+    // Sin backend, no hay QR que mostrar
+    console.warn('Backend no disponible - sin imagen QR')
 
     // Iniciar monitoreo de todas formas
     try {
@@ -251,12 +328,13 @@ const startMonitoring = () => {
   monitoring.value = true
   timeoutSeconds.value = props.timeoutDuration
 
-  // Verificar estado cada 2 segundos
+  // Verificar estado cada 5 segundos
   monitoringInterval = setInterval(async () => {
     try {
-      const status = await paymentMethodService.monitorQrPayment(paymentTicketId.value)
+      const status = await paymentMethodService.monitorPayment(paymentTicketId.value)
+      const normalizedStatus = normalizePaymentStatus(status)
 
-      if (status && status.status === 'completed') {
+      if (normalizedStatus === 'completed' || normalizedStatus === 'approved') {
         paymentCompleted.value = true
         monitoring.value = false
         clearInterval(monitoringInterval)
@@ -269,10 +347,19 @@ const startMonitoring = () => {
     } catch (err) {
       console.warn('Error checking payment status:', err)
     }
-  }, 2000)
+  }, 5000)
 
   // Contar tiempo hacia atrás
   timeoutInterval = setInterval(() => {
+    if (hasSessionCountdown.value) {
+      if (cartStore.secondsRemaining <= 0) {
+        stopMonitoring()
+        error.value = 'El tiempo de espera ha expirado. Por favor, intenta de nuevo.'
+        emit('payment-error', error.value)
+      }
+      return
+    }
+
     timeoutSeconds.value--
     if (timeoutSeconds.value <= 0) {
       stopMonitoring()
@@ -292,12 +379,22 @@ const stopMonitoring = () => {
 }
 
 /**
- * Descargar QR como imagen
+ * Descargar QR como imagen desde URL
  */
 const downloadQR = async () => {
+  if (!qrImageUrl.value) {
+    error.value = 'Imagen QR no disponible'
+    return
+  }
+  
   isDownloading.value = true
   try {
-    await paymentMethodService.downloadQRCode('qr-canvas', `qr-payment-${paymentTicketId.value}.png`)
+    const link = document.createElement('a')
+    link.href = qrImageUrl.value
+    link.download = `qr-payment-${paymentTicketId.value}.png`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   } catch (err) {
     error.value = 'Error al descargar QR'
     console.error('Error downloading QR:', err)
@@ -332,6 +429,7 @@ const cancelPayment = async () => {
     if (paymentTicketId.value) {
       await paymentMethodService.cancelPayment(paymentTicketId.value)
     }
+    cartStore.clearPaymentSession()
     emit('payment-cancelled')
     // Reset state
     qrData.value = null
@@ -354,6 +452,14 @@ const formatTime = (seconds) => {
 
 // Ciclo de vida
 onMounted(() => {
+  if (canReuseActiveSession() && restoreSession()) {
+    return
+  }
+
+  if (cartStore.currentSession && !cartStore.isSessionActive) {
+    cartStore.clearPaymentSession()
+  }
+
   generateQR()
 })
 
@@ -458,10 +564,16 @@ onUnmounted(() => {
   box-shadow: 0 4px 20px rgba(59, 130, 246, 0.2);
 }
 
-.qr-canvas {
-  width: auto;
+.qr-image {
+  width: 100%;
   height: auto;
   max-width: 300px;
+  display: block;
+  margin: 0 auto;
+  border: 2px solid var(--primary);
+  border-radius: 8px;
+  background: white;
+  padding: 10px;
 }
 
 .qr-instructions {

@@ -2,11 +2,15 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 
 const STORAGE_KEY = 'cinea_cart'
+const PAYMENT_SESSION_KEY = 'cinea_payment_session'
 
 export const useCartStore = defineStore('cart', () => {
   const items = ref([])
   const screeningId = ref(null)
   const movieInfo = ref(null)
+  const paymentSession = ref(null)
+  const nowTimestamp = ref(Date.now())
+  let clockInterval = null
 
   // Cargar datos persistidos del localStorage
   const loadFromStorage = () => {
@@ -17,6 +21,16 @@ export const useCartStore = defineStore('cart', () => {
         items.value = data.items || []
         screeningId.value = data.screeningId || null
         movieInfo.value = data.movieInfo || null
+        paymentSession.value = data.paymentSession || null
+      }
+      // Cargar sesión de pago si existe
+      const savedSession = localStorage.getItem(PAYMENT_SESSION_KEY)
+      if (savedSession) {
+        try {
+          paymentSession.value = JSON.parse(savedSession)
+        } catch (e) {
+          console.error('Error loading payment session:', e)
+        }
       }
     } catch (error) {
       console.error('Error loading cart from storage:', error)
@@ -29,9 +43,16 @@ export const useCartStore = defineStore('cart', () => {
       const data = {
         items: items.value,
         screeningId: screeningId.value,
-        movieInfo: movieInfo.value
+        movieInfo: movieInfo.value,
+        paymentSession: paymentSession.value
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+      // Guardar sesión de pago en key separada para recuperación rápida
+      if (paymentSession.value) {
+        localStorage.setItem(PAYMENT_SESSION_KEY, JSON.stringify(paymentSession.value))
+      } else {
+        localStorage.removeItem(PAYMENT_SESSION_KEY)
+      }
     } catch (error) {
       console.error('Error saving cart to storage:', error)
     }
@@ -66,9 +87,44 @@ export const useCartStore = defineStore('cart', () => {
 
   const hasItems = computed(() => items.value.length > 0)
 
+  // Payment Session Getters
+  const isSessionActive = computed(() => {
+    if (!paymentSession.value) return false
+    const { reserved_until } = paymentSession.value
+    if (!reserved_until) return false
+    return new Date(reserved_until).getTime() > nowTimestamp.value
+  })
+
+  const secondsRemaining = computed(() => {
+    if (!paymentSession.value || !paymentSession.value.reserved_until) return 0
+    const remaining = new Date(paymentSession.value.reserved_until).getTime() - nowTimestamp.value
+    return Math.max(0, Math.ceil(remaining / 1000))
+  })
+
+  const currentSession = computed(() => paymentSession.value)
+
+  // Payment Session Actions
+  const setPaymentSession = (sessionData) => {
+    paymentSession.value = sessionData
+    saveToStorage()
+  }
+
+  const clearPaymentSession = () => {
+    paymentSession.value = null
+    saveToStorage()
+  }
+
+  const resetAll = () => {
+    items.value = []
+    screeningId.value = null
+    movieInfo.value = null
+    paymentSession.value = null
+    saveToStorage()
+  }
+
   // Watch para guardar en storage cuando cambien los datos
   watch(
-    [items, screeningId, movieInfo],
+    [items, screeningId, movieInfo, paymentSession],
     () => {
       saveToStorage()
     },
@@ -78,16 +134,31 @@ export const useCartStore = defineStore('cart', () => {
   // Cargar datos al inicializar el store
   loadFromStorage()
 
+  const startClock = () => {
+    if (clockInterval) return
+    clockInterval = setInterval(() => {
+      nowTimestamp.value = Date.now()
+    }, 1000)
+  }
+  startClock()
+
   return {
     items,
     screeningId,
     movieInfo,
+    paymentSession,
     totalPrice,
     totalSeats,
     addItem,
     removeItem,
     clearCart,
     setScreeningInfo,
-    hasItems
+    hasItems,
+    isSessionActive,
+    secondsRemaining,
+    currentSession,
+    setPaymentSession,
+    clearPaymentSession,
+    resetAll
   }
 })

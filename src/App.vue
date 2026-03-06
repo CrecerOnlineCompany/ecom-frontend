@@ -6,6 +6,7 @@
     </main>
     <Footer />
     <Diagnostics />
+    <ActiveOrderModal />
   </div>
 </template>
 
@@ -14,6 +15,7 @@ import { RouterView } from 'vue-router'
 import Navbar from './components/Navbar.vue'
 import Footer from './components/Footer.vue'
 import Diagnostics from './components/Diagnostics.vue'
+import ActiveOrderModal from './components/ActiveOrderModal.vue'
 import { appConfig } from './config/appConfig'
 </script>
 

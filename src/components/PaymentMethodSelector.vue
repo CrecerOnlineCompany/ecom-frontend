@@ -47,19 +47,6 @@
       </div>
     </div>
 
-    <!-- Selected Method Details -->
-    <div v-if="selectedProvider && !loading" class="method-details">
-      <h4>Detalles del Pago</h4>
-      <div class="details-content">
-        <p><strong>Método:</strong> {{ getProviderInfo(selectedProvider.name).name }}</p>
-        <p v-if="selectedProvider.requires_redirect" class="info-text">
-          ℹ️ Serás redirigido a {{ getProviderInfo(selectedProvider.name).name }} para completar el pago de forma segura.
-        </p>
-        <p v-else class="info-text">
-          ℹ️ Por favor, completa los detalles del pago en el formulario.
-        </p>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -97,6 +84,9 @@ const loadProviders = async () => {
     
     if (Array.isArray(data)) {
       providersList = data
+    } else if (data.providers && Array.isArray(data.providers)) {
+      // Formato: { success: true, providers: [...], count: N }
+      providersList = data.providers
     } else if (data.data && Array.isArray(data.data)) {
       providersList = data.data
     } else if (data.success && Array.isArray(data.success)) {
@@ -106,15 +96,36 @@ const loadProviders = async () => {
       providersList = []
     }
     
-    // Filtrar solo proveedores activos
-    providers.value = providersList.filter(p => p.is_active !== false)
-    console.log('Filtered providers:', providers.value)
+    // Filtrar solo proveedores activos y normalizar booleanos
+    providers.value = providersList
+      .filter(p => p.is_active !== false)
+      .map(p => ({
+        ...p,
+        requires_redirect: normalizeBoolean(p.requires_redirect),
+        supports_webhook: normalizeBoolean(p.supports_webhook),
+        is_active: normalizeBoolean(p.is_active)
+      }))
   } catch (err) {
     error.value = 'No se pudieron cargar los métodos de pago. Por favor, intenta más tarde.'
     console.error('Error loading payment providers:', err)
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * Normalizar valores a boolean (maneja strings, números, etc.)
+ * @param {*} value - El valor a normalizar
+ * @returns {boolean}
+ */
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase()
+    return lower === 'true' || lower === '1' || lower === 'on' || lower === 'yes'
+  }
+  if (typeof value === 'number') return value !== 0
+  return !!value
 }
 
 const selectMethod = (providerId) => {
