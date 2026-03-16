@@ -5,7 +5,8 @@
       <RouterView />
     </main>
     <Footer />
-    <Diagnostics />
+    <CartSidebar />
+    <Diagnostics v-if="showDiagnostics" />
     <ActiveOrderModal />
   </div>
 </template>
@@ -14,9 +15,12 @@
 import { RouterView } from 'vue-router'
 import Navbar from './components/Navbar.vue'
 import Footer from './components/Footer.vue'
+import CartSidebar from './components/CartSidebar.vue'
 import Diagnostics from './components/Diagnostics.vue'
 import ActiveOrderModal from './components/ActiveOrderModal.vue'
 import { appConfig } from './config/appConfig'
+
+const showDiagnostics = import.meta.env.DEV
 </script>
 
 <style scoped>

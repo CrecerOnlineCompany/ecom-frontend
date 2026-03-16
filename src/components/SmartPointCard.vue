@@ -122,6 +122,21 @@ const isSameSeatSelection = (left = [], right = []) => {
   return a.every((value, index) => value === b[index])
 }
 
+const getIdempotencyKey = () => {
+  const session = cartStore.currentSession
+  return session?.idempotency_key || null
+}
+
+const getReusableOrderNumber = () => {
+  const session = cartStore.currentSession
+  if (!session) return null
+
+  const sameScreening = Number(session.screening_id) === Number(props.screeningId)
+  const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+
+  return sameScreening && sameSeats ? session.order_number : null
+}
+
 const canReuseActiveSession = () => {
   const session = cartStore.currentSession
   if (!session || !cartStore.isSessionActive) return false
@@ -160,11 +175,16 @@ const initializeTerminal = async () => {
   error.value = null
 
   try {
+    const reusableOrderNumber = getReusableOrderNumber()
+    const sessionOrderNumber = cartStore.currentSession?.order_number || null
+    const idempotencyKey = getIdempotencyKey()
     // Procesar pago terminal en backend
     const response = await paymentMethodService.processTerminalPayment({
       payment_provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
+      order_number: reusableOrderNumber || sessionOrderNumber || null,
+      idempotency_key: idempotencyKey || undefined,
       customer_email: props.customerEmail || 'default@gmail.com',
       customer_name: props.customerName || 'default'
     })
@@ -182,7 +202,8 @@ const initializeTerminal = async () => {
       payment_method: 'terminal',
       provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
-      seat_ids: props.seatIds
+      seat_ids: props.seatIds,
+      idempotency_key: response.idempotency_key || idempotencyKey || undefined
     })
 
     // Guardar datos de la orden
@@ -199,37 +220,9 @@ const initializeTerminal = async () => {
     // Procesar el mensaje de error
     const errorMessage = err?.message || err?.response?.data?.message || 'Error inicializando terminal'
     const processedError = processPaymentErrorMessage(errorMessage)
-    
-    // Si es un error de asientos vendidos o similar, mostrar error
-    if (errorMessage && errorMessage.includes('Seat reservation failed')) {
-      error.value = processedError
-      emit('payment-error', error.value)
-      isLoading.value = false
-      return
-    }
-    
-    // Si es otro tipo de error crítico, también mostrar
-    if (errorMessage && (errorMessage.includes('not found') || errorMessage.includes('invalid'))) {
-      error.value = processedError
-      emit('payment-error', error.value)
-      isLoading.value = false
-      return
-    }
-    
-    // Fallback: Permitir funcionalidad sin backend
-    // Generar un ID local si el backend no responde (para errores temporales)
-    orderId.value = `TERMINAL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    orderInitialized.value = true
-    currentStatus.value = 'waiting'
-    displayStatus.value = 'Acerca tu tarjeta'
-    
-    // Intentar iniciar monitoreo de todas formas
-    try {
-      startMonitoring()
-    } catch (monitoringErr) {
-      console.warn('Monitoreo no disponible:', monitoringErr)
-      // Continuar sin monitoreo
-    }
+    error.value = processedError
+    emit('payment-error', error.value)
+    return
   } finally {
     isLoading.value = false
   }
@@ -350,10 +343,6 @@ const formatTime = (seconds) => {
 onMounted(() => {
   if (canReuseActiveSession() && restoreSession()) {
     return
-  }
-
-  if (cartStore.currentSession && !cartStore.isSessionActive) {
-    cartStore.clearPaymentSession()
   }
 
   initializeTerminal()

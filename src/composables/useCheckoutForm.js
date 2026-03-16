@@ -5,8 +5,6 @@ import { paymentService } from '@/services/paymentService'
 import { processPaymentErrorMessage } from '@/utils/errorHelpers'
 
 const STORAGE_KEY = 'cinea_checkout_form'
-const IDEMPOTENCY_STORAGE_KEY = 'cinea_checkout_idempotency'
-const BASE_PRICE = 8
 
 /**
  * Composable para manejar la lógica del formulario de checkout
@@ -35,42 +33,6 @@ export function useCheckoutForm() {
   const orderExpiresAt = ref(null)
   const showExpirationModal = ref(false)
   const expirationCountdown = ref('00:00')
-  const idempotencyContext = ref(null)
-
-  const createIdempotencyKey = () => {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID()
-    }
-
-    return `ck-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  }
-
-  const loadIdempotencyContext = () => {
-    try {
-      const saved = localStorage.getItem(IDEMPOTENCY_STORAGE_KEY)
-      idempotencyContext.value = saved ? JSON.parse(saved) : null
-    } catch (err) {
-      console.error('Error loading checkout idempotency context:', err)
-      idempotencyContext.value = null
-    }
-  }
-
-  const saveIdempotencyContext = () => {
-    try {
-      if (!idempotencyContext.value) {
-        localStorage.removeItem(IDEMPOTENCY_STORAGE_KEY)
-        return
-      }
-      localStorage.setItem(IDEMPOTENCY_STORAGE_KEY, JSON.stringify(idempotencyContext.value))
-    } catch (err) {
-      console.error('Error saving checkout idempotency context:', err)
-    }
-  }
-
-  const clearIdempotencyContext = () => {
-    idempotencyContext.value = null
-    saveIdempotencyContext()
-  }
 
   const normalizeSeatIds = (seatIds = []) => {
     return [...seatIds].map(id => String(id)).sort()
@@ -95,45 +57,16 @@ export function useCheckoutForm() {
     return sameScreening && sameProvider && sameMethod && sameSeats
   }
 
-  const getCartSignature = ({ screeningId, seatIds }) => {
-    return `${String(screeningId)}|${normalizeSeatIds(seatIds).join(',')}`
+  const getReusableOrderNumber = ({ screeningId, seatIds }) => {
+    const session = cartStore.currentSession
+    if (!session || !cartStore.isSessionActive) return null
+
+    const sameScreening = Number(session.screening_id) === Number(screeningId)
+    const sameSeats = isSameSeatSelection(session.seat_ids || [], seatIds)
+
+    return sameScreening && sameSeats ? session.order_number : null
   }
 
-  const ensureIdempotencyContext = ({ screeningId, seatIds, customerEmail }) => {
-    const signature = getCartSignature({ screeningId, seatIds })
-    const current = idempotencyContext.value
-    const sessionExpired = !!cartStore.currentSession && !cartStore.isSessionActive
-    const contextExpired =
-      !!current?.expires_at && new Date(current.expires_at).getTime() <= Date.now()
-    const cartChanged = !!current?.cart_signature && current.cart_signature !== signature
-    const screeningChanged = !!current && Number(current.screening_id) !== Number(screeningId)
-
-    if (sessionExpired || contextExpired || cartChanged || screeningChanged) {
-      if (cartStore.currentSession) {
-        cartStore.clearPaymentSession()
-      }
-      clearIdempotencyContext()
-    }
-
-    if (!idempotencyContext.value) {
-      idempotencyContext.value = {
-        idempotency_key: createIdempotencyKey(),
-        screening_id: screeningId,
-        cart_signature: signature,
-        customer_email: customerEmail || '',
-        created_at: new Date().toISOString(),
-        expires_at: null
-      }
-      saveIdempotencyContext()
-    }
-
-    if (!idempotencyContext.value.customer_email && customerEmail) {
-      idempotencyContext.value.customer_email = customerEmail
-      saveIdempotencyContext()
-    }
-
-    return idempotencyContext.value
-  }
 
   /**
    * Cargar datos del formulario desde localStorage
@@ -175,17 +108,16 @@ export function useCheckoutForm() {
         cardExpiry: '',
         cardCVC: '',
       }
-      clearIdempotencyContext()
     } catch (err) {
       console.error('Error clearing checkout form:', err)
     }
   }
 
   /**
-   * Calcular subtotal (cantidad de asientos × precio base)
+   * Calcular subtotal basado en los precios del carrito
    */
   const subtotal = computed(() => {
-    return cartStore.items.length * BASE_PRICE
+    return cartStore.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0)
   })
 
   /**
@@ -318,27 +250,34 @@ export function useCheckoutForm() {
       return
     }
 
+    if (cartStore.hasMultipleScreenings) {
+      error.value = 'No se pueden mezclar funciones en una misma compra. Deja solo una función en el carrito para continuar.'
+      return
+    }
+
     isProcessing.value = true
     error.value = ''
 
     try {
       // Preparar request BATCH con TODOS los asientos
       const seatIds = cartStore.items.map(item => item.seat_id)
-      const screeningId = cartStore.items[0]?.screening_id
+      const screeningIds = [
+        ...new Set(
+          cartStore.items
+            .map(item => Number(item.screening_id))
+            .filter(id => Number.isFinite(id) && id > 0)
+        )
+      ]
+      const screeningId = screeningIds.length === 1 ? screeningIds[0] : null
       const provider = paymentProviders.value.find(p => p.id === selectedPaymentMethod.value)
       const requiresRedirect = !!provider?.requires_redirect
+      const reusableOrderNumber = getReusableOrderNumber({ screeningId, seatIds })
 
       if (!screeningId) {
-        error.value = 'Error: falta la información de la sesión'
+        error.value = 'No se puede procesar el pago porque el carrito tiene funciones inválidas o mezcladas.'
         isProcessing.value = false
         return
       }
-
-      const context = ensureIdempotencyContext({
-        screeningId,
-        seatIds,
-        customerEmail: form.value.email
-      })
 
       if (
         hasReusableSession({
@@ -364,7 +303,7 @@ export function useCheckoutForm() {
       }
 
       // Llenar valores por defecto si están vacíos
-      const customerEmail = context.customer_email || form.value.email || 'default@gmail.com'
+      const customerEmail = form.value.email || 'default@gmail.com'
       const customerName = form.value.name || 'default'
       const customerPhone = form.value.phone || '000000'
 
@@ -377,12 +316,13 @@ export function useCheckoutForm() {
         screening_id: screeningId,
         seat_ids: seatIds,
         payment_provider_id: selectedPaymentMethod.value,
+        order_number: reusableOrderNumber || undefined,
+        idempotency_key: cartStore.currentSession?.idempotency_key || undefined,
         customer_email: customerEmail,
         customer_name: customerName,
         customer_phone: customerPhone,
         additional_data: {
           payment_method: paymentMethodType.value || 'redirect',
-          idempotency_key: context.idempotency_key,
         },
       }
 
@@ -392,7 +332,7 @@ export function useCheckoutForm() {
       console.log('Cart items:', cartStore.items)
       console.log('Seat IDs:', seatIds)
       console.log('Seat IDs count:', seatIds.length)
-      console.log('Expected total (items × $8):', cartStore.items.length * 8)
+      console.log('Expected total (cart subtotal):', subtotal.value)
       console.log('Payment Method Type:', paymentMethodType.value)
       console.log('Selected Payment Provider ID:', selectedPaymentMethod.value)
       console.log('Sending BATCH payment request:', batchPaymentData)
@@ -416,15 +356,6 @@ export function useCheckoutForm() {
         showExpirationModal.value = true
         startExpirationCountdown()
 
-        idempotencyContext.value = {
-          ...context,
-          screening_id: screeningId,
-          cart_signature: getCartSignature({ screeningId, seatIds }),
-          customer_email: customerEmail,
-          expires_at: paymentResponse.reserved_until
-        }
-        saveIdempotencyContext()
-
         cartStore.setPaymentSession({
           order_id: paymentResponse.order_id,
           order_number: paymentResponse.order_number,
@@ -434,7 +365,7 @@ export function useCheckoutForm() {
           provider_id: selectedPaymentMethod.value,
           screening_id: screeningId,
           seat_ids: seatIds,
-          idempotency_key: context.idempotency_key,
+          idempotency_key: paymentResponse.idempotency_key,
           redirect_url: paymentResponse.redirect_url || null
         })
       }
@@ -527,8 +458,6 @@ export function useCheckoutForm() {
   const closeExpirationModal = () => {
     showExpirationModal.value = false
   }
-
-  loadIdempotencyContext()
 
   return {
     form,

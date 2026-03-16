@@ -14,25 +14,42 @@
       <div v-else-if="screening" class="booking-content">
         <!-- Screening Info -->
         <div class="screening-info">
-          <h2>{{ movieTitle }}</h2>
-          <div class="info-grid">
-            <div class="info-item">
-              <span class="label">Cine:</span>
-              <span>{{ screening.cinema_name || screening.cinema?.name || 'N/A' }}</span>
+          <div class="screening-info-header">
+            <div>
+              <p class="screening-kicker">Función seleccionada</p>
+              <h2>{{ displayMovieTitle }}</h2>
             </div>
-            <div class="info-item">
-              <span class="label">Sala:</span>
-              <span>{{ screening.room_number || screening.room?.room_number || 'N/A' }}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">Fecha:</span>
-              <span>{{ formatDate(screening.start_time) }}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">Hora:</span>
-              <span>{{ formatTime(screening.start_time) }}</span>
+            <div class="screening-price-chip">
+              <span>Entrada</span>
+              <strong>${{ screeningBasePrice.toFixed(2) }}</strong>
             </div>
           </div>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="label">Cine</span>
+              <span class="value">{{ displayCinemaName }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Sala</span>
+              <span class="value">{{ displayRoomNumber }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Fecha</span>
+              <span class="value">{{ formatDate(screeningStartTime) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Hora</span>
+              <span class="value">{{ formatTime(screeningStartTime) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Formato</span>
+              <span class="value">{{ displayFormat }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="bookingNotice" class="booking-alert">
+          <p>{{ bookingNotice }}</p>
         </div>
 
         <div class="booking-layout">
@@ -52,19 +69,19 @@
               >
                 <div class="row-label">{{ getRowLabel(row, rowIndex) }}</div>
                 <div class="row-seats">
-                  <div
-                    v-for="seat in row"
-                    :key="seat.id"
-                    :class="['seat', getSeatClass(seat)]"
-                    @click="toggleSeat(seat)"
-                    :title="`Asiento ${getSeatCode(seat)}`"
-                  >
-                    <span v-if="isBlocked(seat)" class="occupied-icon">⛔</span>
-                    <span v-else-if="isSelected(seat) || !isOccupied(seat)" class="seat-number">
-                      {{ seat.seat_number }}
-                    </span>
-                    <span v-else class="occupied-icon">✗</span>
-                  </div>
+                <div 
+                  v-for="seat in row"
+                  :key="seat.id"
+                  :class="['seat', getSeatClass(seat)]"
+                  @click="toggleSeat(seat)"
+                  :title="`Asiento ${getSeatCode(seat)}`"
+                >
+                  <span v-if="isBlocked(seat)" class="occupied-icon">⛔</span>
+                  <span v-else-if="isSelected(seat) || !isOccupied(seat)" class="seat-number">
+                    {{ seat.seat_code ?? seat.display_number }}
+                  </span>
+                  <span v-else class="occupied-icon">✗</span>
+                </div>
                 </div>
               </div>
             </div>
@@ -102,7 +119,7 @@
                   :key="seat.id"
                   class="seat-item"
                 >
-                  <span>{{ seat.seat_code || `${String.fromCharCode(64 + seat.row_number)}${seat.seat_number}` }}</span>
+                  <span>{{ seat.seat_code ?? seat.display_number }}</span>
                   <span class="seat-price">${{ getSeatPrice(seat) }}</span>
                   <button 
                     @click="toggleSeat(seat)"
@@ -178,29 +195,43 @@ const selectedSeats = ref([])
 const loading = ref(true)
 const seatsLoading = ref(false)
 const movieTitle = ref('')
-const basePrice = 8
+const bookingNotice = ref('')
+const FALLBACK_BASE_PRICE = 8
+
+const displayMovieTitle = computed(() => {
+  return screening.value?.movie_title || screening.value?.movie?.title || movieTitle.value || 'Película'
+})
+
+const displayCinemaName = computed(() => {
+  return screening.value?.cinema_name || screening.value?.cinema?.name || screening.value?.cinema?.cinema_name || 'Cine no disponible'
+})
+
+const displayRoomNumber = computed(() => {
+  return screening.value?.room_number || screening.value?.room?.room_number || screening.value?.room?.name || 'N/A'
+})
+
+const displayFormat = computed(() => {
+  return screening.value?.format || screening.value?.movie?.format || '2D'
+})
+
+const screeningStartTime = computed(() => {
+  return screening.value?.start_time || screening.value?.starts_at || ''
+})
 
 const parseSeatLabel = (seatLabel = '') => {
-  const normalized = String(seatLabel).trim().toUpperCase()
-  const match = normalized.match(/^([A-Z]+)(\d+)$/)
-  if (!match) return null
+  const normalized = String(seatLabel).trim()
+  const digitsOnly = normalized.match(/^(\d+)$/)
+  if (!digitsOnly) return null
 
-  const rowLetters = match[1]
-  const seatNumber = Number(match[2])
-  const rowNumber = rowLetters
-    .split('')
-    .reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0)
-
+  const seatNumber = Number(digitsOnly[1])
   return {
-    row_number: rowNumber || 1,
+    row_number: 1,
     seat_number: Number.isNaN(seatNumber) ? 1 : seatNumber
   }
 }
 
 onMounted(async () => {
   await loadScreeningData()
-  // Restaurar asientos seleccionados desde el carrito
-  restoreSelectedSeatsFromCart()
 })
 
 /**
@@ -232,8 +263,8 @@ const restoreSelectedSeatsFromCart = () => {
       const parsedSeat = parseSeatLabel(cartItem.seat_label)
       return {
         id: cartSeatId,
-        row_number: parsedSeat?.row_number || 1,
-        seat_number: parsedSeat?.seat_number || 1,
+        row_number: Number(cartItem.row_number) || parsedSeat?.row_number || 1,
+        seat_number: Number(cartItem.seat_number) || parsedSeat?.seat_number || 1,
         seat_code: cartItem.seat_label || undefined,
         status: 'reserved'
       }
@@ -290,12 +321,12 @@ const loadSeats = async () => {
       seats.value = []
     }
 
-    // Restaurar asientos seleccionados desde el carrito después de cargar
-    restoreSelectedSeatsFromCart()
   } catch (error) {
     console.error('Error loading seats:', error)
     seats.value = []
   } finally {
+    // Restaurar asientos seleccionados desde el carrito (incluso si falla la API)
+    restoreSelectedSeatsFromCart()
     seatsLoading.value = false
   }
 }
@@ -331,7 +362,7 @@ const seatsByRow = computed(() => {
   })
 
   // Completar estructura: si faltan números de asiento en una fila, se renderizan como bloqueados.
-  return Object.keys(rows)
+  const filledRows = Object.keys(rows)
     .sort((a, b) => Number(a) - Number(b))
     .map(rowNum => {
       const rowSeats = rows[rowNum].sort((a, b) => (a.seat_number || 0) - (b.seat_number || 0))
@@ -358,6 +389,18 @@ const seatsByRow = computed(() => {
 
       return filledRow
     })
+
+  let runningOffset = 0
+  filledRows.forEach(row => {
+    row.forEach((seat, index) => {
+      if (seat.seat_number == null) {
+        seat.display_number = runningOffset + index + 1
+      }
+    })
+    runningOffset += row.length
+  })
+
+  return filledRows
 })
 
 const isOccupied = (seat) => {
@@ -382,20 +425,35 @@ const getSeatClass = (seat) => {
 }
 
 const getSeatCode = (seat) => {
-  if (seat.seat_code) return seat.seat_code
-  const rowNumber = Number(seat.row_number || seat.row || 1)
-  return `${String.fromCharCode(64 + rowNumber)}${seat.seat_number || ''}`
+  return `${seat.seat_code ?? seat.display_number ?? ''}`
 }
 
 const getRowLabel = (row, rowIndex) => {
-  const seatWithCode = row.find(seat => seat.seat_code)
-  if (seatWithCode?.seat_code) return seatWithCode.seat_code.charAt(0)
   const rowNumber = Number(row[0]?.row_number || rowIndex + 1)
-  return String.fromCharCode(64 + rowNumber)
+  return `${rowNumber}`
 }
 
+const parsePrice = (value) => {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? numericValue : null
+}
+
+const screeningBasePrice = computed(() => {
+  if (!screening.value) return FALLBACK_BASE_PRICE
+
+  const screeningPrice =
+    parsePrice(screening.value.price) ??
+    parsePrice(screening.value.ticket_price) ??
+    parsePrice(screening.value.movie?.base_price)
+
+  return screeningPrice ?? FALLBACK_BASE_PRICE
+})
+
 const getSeatPrice = (seat) => {
-  return basePrice
+  const seatPrice =
+    parsePrice(seat?.price)
+
+  return seatPrice ?? screeningBasePrice.value
 }
 
 const toggleSeat = (seat) => {
@@ -420,14 +478,19 @@ const toggleSeat = (seat) => {
 }
 
 const subtotal = computed(() => {
-  return selectedSeats.value.length * basePrice
+  return selectedSeats.value.reduce((sum, seat) => sum + getSeatPrice(seat), 0)
 })
 
 const clearSelection = () => {
+  selectedSeats.value.forEach(seat => {
+    cartStore.removeItem(seat.id)
+  })
   selectedSeats.value = []
 }
 
 const proceedToCheckout = () => {
+  bookingNotice.value = ''
+
   // Guardar info de screening en cartStore para poder volver
   cartStore.setScreeningInfo(screening.value.id, {
     title: movieTitle.value,
@@ -435,36 +498,54 @@ const proceedToCheckout = () => {
   })
 
   // Add seats to cart
-  selectedSeats.value.forEach(seat => {
-    cartStore.addItem({
+  for (const seat of selectedSeats.value) {
+    const result = cartStore.addItem({
       id: seat.id,
       screening_id: screening.value.id,
       seat_id: seat.id,
-      seat_label: seat.seat_code || `${String.fromCharCode(64 + seat.row_number)}${seat.seat_number}`,
+      seat_label: seat.seat_code ?? seat.display_number,
+      row_number: seat.row_number,
+      seat_number: seat.seat_number,
       price: getSeatPrice(seat),
-      movie_title: movieTitle.value
+      movie_title: displayMovieTitle.value,
+      cinema_name: displayCinemaName.value,
+      room_number: displayRoomNumber.value,
+      start_time: screeningStartTime.value,
+      screening_format: displayFormat.value
     })
-  })
+
+    if (!result?.success) {
+      bookingNotice.value = result.message || cartStore.getScreeningConflictMessage()
+      break
+    }
+  }
+
+  if (bookingNotice.value) {
+    return
+  }
 
   // Navigate to checkout
   router.push('/checkout')
 }
 
 const formatDate = (dateTimeString) => {
+  if (!dateTimeString) return 'N/A'
   try {
     const date = parseISO(dateTimeString)
     return format(date, "d 'de' MMMM 'de' yyyy", { locale: es })
   } catch {
-    return dateTimeString
+    return String(dateTimeString)
   }
 }
 
 const formatTime = (dateTimeString) => {
+  if (!dateTimeString) return 'N/A'
   try {
     const date = parseISO(dateTimeString)
     return format(date, 'HH:mm')
   } catch {
-    return dateTimeString.split(' ')[1]
+    const timePart = String(dateTimeString).split(' ')[1]
+    return timePart || 'N/A'
   }
 }
 </script>
@@ -499,15 +580,53 @@ const formatTime = (dateTimeString) => {
 }
 
 .screening-info {
+  background: rgba(26, 26, 26, 0.6);
   padding: 1.5rem;
   border-radius: 8px;
   border: 1px solid #3d3d3d;
   margin-bottom: 2rem;
 }
 
-.screening-info h2 {
-  color: var(--primary);
+.screening-info-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
   margin-bottom: 1rem;
+}
+
+.screening-kicker {
+  margin: 0 0 0.35rem 0;
+  color: #96a3b8;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.screening-info h2 {
+  margin: 0;
+  color: var(--primary);
+}
+
+.screening-price-chip {
+  background: #101218;
+  border: 1px solid #2f3440;
+  border-radius: 8px;
+  padding: 0.65rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+
+.screening-price-chip span {
+  color: #96a3b8;
+  font-size: 0.75rem;
+}
+
+.screening-price-chip strong {
+  color: #fff;
+  font-size: 1rem;
 }
 
 .info-grid {
@@ -516,16 +635,44 @@ const formatTime = (dateTimeString) => {
   gap: 1rem;
 }
 
+.booking-alert {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-left: 4px solid #ef4444;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.booking-alert p {
+  margin: 0;
+  color: #fecaca;
+  font-size: 0.95rem;
+}
+
 .info-item {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  background: rgba(16, 18, 24, 0.75);
+  border: 1px solid #2f3440;
+  border-radius: 8px;
+  padding: 0.75rem 0.85rem;
 }
 
 .info-item .label {
-  color: var(--primary);
+  color: #96a3b8;
   font-weight: 600;
-  margin-right: 0.5rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.info-item .value {
+  color: #f4f7ff;
+  font-size: 0.98rem;
+  font-weight: 600;
 }
 
 .booking-layout {
@@ -815,6 +962,15 @@ const formatTime = (dateTimeString) => {
     margin-bottom: 1rem;
   }
 
+  .screening-info-header {
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .screening-price-chip {
+    min-width: 120px;
+  }
+
   .info-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 0.75rem;
@@ -960,7 +1116,17 @@ const formatTime = (dateTimeString) => {
 
   .screening-info h2 {
     font-size: 1.1rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0;
+  }
+
+  .screening-info-header {
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .screening-price-chip {
+    width: 100%;
+    align-items: flex-start;
   }
 
   .info-grid {

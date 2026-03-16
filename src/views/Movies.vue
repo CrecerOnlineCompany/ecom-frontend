@@ -315,6 +315,60 @@ const handleImageError = (event) => {
   font-size: 1.1rem;
 }
 
+@media (min-width: 1920px) {
+  .movies-page h1 {
+    font-size: 3rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .filters {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.25rem;
+    padding: 2rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .movies-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2.5rem;
+    align-items: start;
+  }
+
+  .movie-info h3 {
+    font-size: 1.3rem;
+    line-height: 1.35;
+  }
+
+  .genre,
+  .synopsis,
+  .movie-meta {
+    font-size: 1rem;
+  }
+
+  .movie-overlay .btn {
+    min-height: 64px;
+    font-size: 1.1rem;
+    padding: 0 2rem;
+  }
+}
+
+@media (min-width: 2560px) {
+  .movies-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 3rem;
+  }
+
+  .movie-info h3 {
+    font-size: 1.45rem;
+  }
+
+  .genre,
+  .synopsis,
+  .movie-meta {
+    font-size: 1.1rem;
+  }
+}
+
 @media (max-width: 768px) {
   .movies-page {
     padding: 1.5rem 0;

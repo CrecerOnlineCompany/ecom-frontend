@@ -74,13 +74,21 @@
             <div class="items-section">
               <h4>Entradas Seleccionadas</h4>
               <div class="order-items">
-                <div v-for="item in cartStore.items" :key="item.id" class="order-item">
+                <div v-for="item in detailedCartItems" :key="item.id" class="order-item">
                   <div class="item-details">
                     <p class="item-label">Asiento {{ item.seat_label }}</p>
                     <p class="item-movie" v-if="item.movie_title">{{ item.movie_title }}</p>
+                    <p class="item-function" v-if="item.cinema_name || item.room_number">
+                      {{ item.cinema_name || 'Cine' }}
+                      <span v-if="item.room_number"> · Sala {{ item.room_number }}</span>
+                    </p>
+                    <p class="item-function" v-if="item.start_time || item.screening_format">
+                      <span v-if="item.start_time">{{ formatScreeningDate(item.start_time) }} · {{ formatScreeningTime(item.start_time) }}</span>
+                      <span v-if="item.screening_format"> · {{ item.screening_format }}</span>
+                    </p>
                   </div>
                   <div class="item-actions">
-                    <span class="item-price">${{ item.price }}</span>
+                    <span class="item-price">${{ formatItemPrice(item.price) }}</span>
                     <button 
                       @click="removeItemFromCart(item.id)"
                       class="btn-remove"
@@ -305,13 +313,17 @@ import { computed, onMounted, watch, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCartStore } from '@/stores/cartStore'
 import { useCheckoutForm } from '@/composables/useCheckoutForm'
+import { screeningService } from '@/services/ticketService'
 import PaymentMethodSelector from '@/components/PaymentMethodSelector.vue'
 import QRPaymentCard from '@/components/QRPaymentCard.vue'
 import SmartPointCard from '@/components/SmartPointCard.vue'
+import { format, parseISO } from 'date-fns'
+import { es } from 'date-fns/locale'
 import '@/styles/checkout.css'
 
 const router = useRouter()
 const cartStore = useCartStore()
+const screeningDetailsById = ref({})
 
 const {
   form,
@@ -457,6 +469,95 @@ const seatIds = computed(() => {
   return cartStore.items.map(item => item.seat_id || item.id)
 })
 
+const detailedCartItems = computed(() => {
+  return cartStore.items.map(item => {
+    const screeningData = screeningDetailsById.value[item.screening_id] || {}
+    const movieTitle =
+      item.movie_title ||
+      screeningData.movie_title ||
+      screeningData.movie?.title ||
+      cartStore.movieInfo?.title
+    const cinemaName =
+      item.cinema_name ||
+      screeningData.cinema_name ||
+      screeningData.cinema?.name ||
+      screeningData.cinema?.cinema_name
+    const roomNumber =
+      item.room_number ||
+      screeningData.room_number ||
+      screeningData.room?.room_number ||
+      screeningData.room?.name
+    const startTime = item.start_time || screeningData.start_time || screeningData.starts_at
+    const screeningFormat = item.screening_format || screeningData.format || screeningData.movie?.format
+
+    return {
+      ...item,
+      movie_title: movieTitle,
+      cinema_name: cinemaName,
+      room_number: roomNumber,
+      start_time: startTime,
+      screening_format: screeningFormat
+    }
+  })
+})
+
+const formatItemPrice = (value) => {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? numericValue.toFixed(2) : '0.00'
+}
+
+const formatScreeningDate = (dateTime) => {
+  if (!dateTime) return 'Fecha N/A'
+  try {
+    return format(parseISO(dateTime), "d 'de' MMM", { locale: es })
+  } catch {
+    return 'Fecha N/A'
+  }
+}
+
+const formatScreeningTime = (dateTime) => {
+  if (!dateTime) return 'Hora N/A'
+  try {
+    return format(parseISO(dateTime), 'HH:mm')
+  } catch {
+    const timePart = String(dateTime).split(' ')[1]
+    return timePart || 'Hora N/A'
+  }
+}
+
+const loadScreeningDetails = async () => {
+  const screeningIds = [
+    ...new Set(
+      cartStore.items
+        .map(item => Number(item.screening_id))
+        .filter(id => Number.isFinite(id) && id > 0)
+    )
+  ]
+
+  if (screeningIds.length === 0) {
+    screeningDetailsById.value = {}
+    return
+  }
+
+  const missingIds = screeningIds.filter(id => !screeningDetailsById.value[id])
+  if (missingIds.length === 0) return
+
+  const responses = await Promise.all(
+    missingIds.map(async (screeningId) => {
+      const data = await screeningService.getById(screeningId)
+      return { screeningId, data }
+    })
+  )
+
+  const nextMap = { ...screeningDetailsById.value }
+  responses.forEach(({ screeningId, data }) => {
+    if (data) {
+      nextMap[screeningId] = data
+    }
+  })
+  screeningDetailsById.value = nextMap
+}
+
 /**
  * Manejar éxito del pago QR
  */
@@ -538,7 +639,11 @@ const handleRestartOrder = async () => {
 
   try {
     const { paymentMethodService } = await import('@/services/PaymentMethodService')
-    const cancelResponse = await paymentMethodService.cancelOrderByNumber(currentSession.value.order_number)
+    const providerId = currentSession.value?.provider_id
+    const cancelResponse = await paymentMethodService.cancelOrderByNumber(
+      currentSession.value.order_number,
+      providerId
+    )
 
     if (cancelResponse?.success) {
       cartStore.resetAll()
@@ -567,6 +672,9 @@ onMounted(async () => {
 
   // Cargar métodos de pago disponibles
   await loadPaymentProviders()
+
+  // Completar metadata de screening para mostrar detalle por entrada
+  await loadScreeningDetails()
 })
 
 // Detectar tipo de método cuando se selecciona un proveedor
@@ -576,6 +684,13 @@ watch(selectedPaymentMethod, () => {
 
 // Auto-guardar datos del formulario cuando cambian
 watch(() => form.value, saveFormData, { deep: true })
+
+watch(
+  () => cartStore.items.map(item => item.screening_id).join(','),
+  async () => {
+    await loadScreeningDetails()
+  }
+)
 
 /**
  * Remover un item del carrito
@@ -676,7 +791,7 @@ const removeItemFromCart = (itemId) => {
 .order-item {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: 0.75rem;
   background: #1a1a1a;
   border-radius: 4px;
@@ -704,6 +819,13 @@ const removeItemFromCart = (itemId) => {
   font-weight: 400;
 }
 
+.item-function {
+  margin: 0.2rem 0 0 0;
+  color: #9aa3b2;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
 .item-vip {
   margin: 0.25rem 0 0 0;
   color: #ffa500;
@@ -716,6 +838,7 @@ const removeItemFromCart = (itemId) => {
   align-items: center;
   gap: 0.5rem;
   flex-shrink: 0;
+  margin-top: 0.15rem;
 }
 
 .item-price {

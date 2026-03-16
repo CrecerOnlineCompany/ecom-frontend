@@ -59,19 +59,92 @@ export const useCartStore = defineStore('cart', () => {
   }
 
   const totalPrice = computed(() => {
-    return items.value.reduce((sum, item) => sum + item.price, 0)
+    return items.value.reduce((sum, item) => sum + (Number(item.price) || 0), 0)
   })
 
   const totalSeats = computed(() => items.value.length)
 
-  const addItem = (seat) => {
-    if (!items.value.find(item => item.id === seat.id)) {
-      items.value.push(seat)
+  const normalizeScreeningId = (value) => {
+    const numericValue = Number(value)
+    return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : null
+  }
+
+  const getUniqueScreeningIds = () => {
+    const ids = items.value
+      .map(item => normalizeScreeningId(item?.screening_id))
+      .filter(id => id !== null)
+    return [...new Set(ids)]
+  }
+
+  const cartScreeningIds = computed(() => getUniqueScreeningIds())
+  const hasMultipleScreenings = computed(() => cartScreeningIds.value.length > 1)
+  const currentCartScreeningId = computed(() => {
+    return cartScreeningIds.value.length === 1 ? cartScreeningIds.value[0] : null
+  })
+
+  const getScreeningConflictMessage = () => {
+    return 'Por ahora solo puedes comprar asientos de una función por vez. Vacía el carrito para cambiar de función.'
+  }
+
+  const syncScreeningContext = () => {
+    const singleScreeningId = currentCartScreeningId.value
+    if (singleScreeningId) {
+      screeningId.value = singleScreeningId
+      return
     }
+
+    if (items.value.length === 0) {
+      screeningId.value = null
+      movieInfo.value = null
+      return
+    }
+
+    // Estado legado: carrito con múltiples funciones
+    screeningId.value = null
+  }
+
+  const addItem = (seat) => {
+    const newItemScreeningId = normalizeScreeningId(seat?.screening_id)
+    const existingScreeningId = currentCartScreeningId.value
+
+    if (!newItemScreeningId) {
+      return {
+        success: false,
+        code: 'MISSING_SCREENING',
+        message: 'No se pudo agregar el asiento porque falta la función.'
+      }
+    }
+
+    if (existingScreeningId && existingScreeningId !== newItemScreeningId) {
+      return {
+        success: false,
+        code: 'SCREENING_MISMATCH',
+        message: getScreeningConflictMessage()
+      }
+    }
+
+    const alreadyExists = items.value.find(item => {
+      return Number(item.id) === Number(seat.id) && Number(item.screening_id) === newItemScreeningId
+    })
+
+    if (alreadyExists) {
+      return {
+        success: true,
+        code: 'ALREADY_EXISTS'
+      }
+    }
+
+    items.value.push({
+      ...seat,
+      screening_id: newItemScreeningId
+    })
+    syncScreeningContext()
+    return { success: true }
   }
 
   const removeItem = (seatId) => {
-    items.value = items.value.filter(item => item.id !== seatId)
+    items.value = items.value.filter(item => Number(item.id) !== Number(seatId))
+    syncScreeningContext()
   }
 
   const clearCart = () => {
@@ -133,6 +206,7 @@ export const useCartStore = defineStore('cart', () => {
 
   // Cargar datos al inicializar el store
   loadFromStorage()
+  syncScreeningContext()
 
   const startClock = () => {
     if (clockInterval) return
@@ -149,6 +223,10 @@ export const useCartStore = defineStore('cart', () => {
     paymentSession,
     totalPrice,
     totalSeats,
+    cartScreeningIds,
+    hasMultipleScreenings,
+    currentCartScreeningId,
+    getScreeningConflictMessage,
     addItem,
     removeItem,
     clearCart,

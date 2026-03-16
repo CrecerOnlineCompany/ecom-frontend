@@ -185,6 +185,21 @@ const isSameSeatSelection = (left = [], right = []) => {
   return a.every((value, index) => value === b[index])
 }
 
+const getIdempotencyKey = () => {
+  const session = cartStore.currentSession
+  return session?.idempotency_key || null
+}
+
+const getReusableOrderNumber = () => {
+  const session = cartStore.currentSession
+  if (!session) return null
+
+  const sameScreening = Number(session.screening_id) === Number(props.screeningId)
+  const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+
+  return sameScreening && sameSeats ? session.order_number : null
+}
+
 const canReuseActiveSession = () => {
   const session = cartStore.currentSession
   if (!session || !cartStore.isSessionActive) return false
@@ -241,11 +256,16 @@ const generateQR = async () => {
   error.value = null
 
   try {
+    const reusableOrderNumber = getReusableOrderNumber()
+    const sessionOrderNumber = cartStore.currentSession?.order_number || null
+    const idempotencyKey = getIdempotencyKey()
     // Procesar pago QR en backend
     const response = await paymentMethodService.processQrPayment({
       payment_provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
+      order_number: reusableOrderNumber || sessionOrderNumber || null,
+      idempotency_key: idempotencyKey || undefined,
       customer_email: props.customerEmail || 'default@gmail.com',
       customer_name: props.customerName || 'default'
     })
@@ -264,7 +284,8 @@ const generateQR = async () => {
       provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
-      qr_data: response.qr_data
+      qr_data: response.qr_data,
+      idempotency_key: response.idempotency_key || idempotencyKey || undefined
     })
 
     // Guardar datos del pago
@@ -454,10 +475,6 @@ const formatTime = (seconds) => {
 onMounted(() => {
   if (canReuseActiveSession() && restoreSession()) {
     return
-  }
-
-  if (cartStore.currentSession && !cartStore.isSessionActive) {
-    cartStore.clearPaymentSession()
   }
 
   generateQR()

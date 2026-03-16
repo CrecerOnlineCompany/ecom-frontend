@@ -358,6 +358,63 @@ const handleImageError = (event) => {
   font-size: 1.1rem;
 }
 
+@media (min-width: 1920px) {
+  .section {
+    padding: 4rem 0;
+  }
+
+  .section h2 {
+    font-size: 2.4rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .movies-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2.5rem;
+    align-items: start;
+  }
+
+  .movie-info h3 {
+    font-size: 1.3rem;
+    line-height: 1.35;
+  }
+
+  .genre,
+  .movie-meta {
+    font-size: 1rem;
+  }
+
+  .movie-overlay .btn {
+    min-height: 64px;
+    font-size: 1.1rem;
+    padding: 0 2rem;
+  }
+
+  .cta-content h2 {
+    font-size: 2.8rem;
+  }
+
+  .cta-content p {
+    font-size: 1.25rem;
+  }
+}
+
+@media (min-width: 2560px) {
+  .movies-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 3rem;
+  }
+
+  .movie-info h3 {
+    font-size: 1.45rem;
+  }
+
+  .genre,
+  .movie-meta {
+    font-size: 1.1rem;
+  }
+}
+
 @media (max-width: 768px) {
   .hero {
     height: 280px;

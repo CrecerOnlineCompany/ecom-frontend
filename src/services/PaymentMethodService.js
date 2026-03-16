@@ -41,6 +41,8 @@ class PaymentMethodService {
         payment_provider_id: paymentData.payment_provider_id,
         screening_id: paymentData.screening_id,
         seat_ids: paymentData.seat_ids,
+        order_number: paymentData.order_number,
+        idempotency_key: paymentData.idempotency_key,
         customer_email: paymentData.customer_email,
         customer_name: paymentData.customer_name
       })
@@ -59,6 +61,7 @@ class PaymentMethodService {
         order_number: response.data.order_number,
         reserved_until: response.data.reserved_until,
         payment_ticket_id: response.data.payment_ticket_id,
+        idempotency_key: response.data.idempotency_key,
         qr_data: response.data.qr_data || response.data.qr_code,
         error_code: response.data.error_code,
         message: response.data.message
@@ -78,9 +81,18 @@ class PaymentMethodService {
         payment_provider_id: paymentData.payment_provider_id,
         screening_id: paymentData.screening_id,
         seat_ids: paymentData.seat_ids,
+        order_number: paymentData.order_number,
+        idempotency_key: paymentData.idempotency_key,
         customer_email: paymentData.customer_email,
         customer_name: paymentData.customer_name
       })
+
+      if (response?.data?.success === false) {
+        const backendError = new Error(response.data.message || 'No se pudo iniciar el pago en terminal')
+        backendError.code = response.data.error_code || 'PAYMENT_ERROR'
+        backendError.backend = response.data
+        throw backendError
+      }
       
       // Normalizar response
       return {
@@ -88,7 +100,10 @@ class PaymentMethodService {
         order_id: response.data.order_id,
         order_number: response.data.order_number,
         reserved_until: response.data.reserved_until,
-        payment_ticket_id: response.data.payment_ticket_id
+        payment_ticket_id: response.data.payment_ticket_id,
+        idempotency_key: response.data.idempotency_key,
+        error_code: response.data.error_code,
+        message: response.data.message
       }
     } catch (error) {
       console.error('Error processing terminal payment:', error)
@@ -274,11 +289,16 @@ class PaymentMethodService {
   /**
    * Cancelar orden pendiente por numero de orden
    */
-  async cancelOrderByNumber(orderNumber) {
+  async cancelOrderByNumber(orderNumber, providerId) {
     try {
-      const response = await this.api.post('/payment-cancel', {
+      const payload = {
         order_number: orderNumber
-      })
+      }
+      if (providerId !== undefined && providerId !== null) {
+        payload.payment_provider_id = providerId
+      }
+
+      const response = await this.api.post('/payment-cancel', payload)
       return response.data
     } catch (error) {
       console.error('Error cancelling order by number:', error)

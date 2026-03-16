@@ -19,33 +19,65 @@
         </div>
 
         <!-- Ticket Information -->
-        <div class="ticket-display" v-if="ticketData && !requiresDeskAssistance">
+        <div class="ticket-display" v-if="hasTickets && !requiresDeskAssistance">
           <div class="ticket-section">
-            <h3>Información de la Entrada</h3>
-            <div class="info-grid">
-              <div class="info-item">
-                <span class="info-label">Número de Entrada:</span>
-                <span class="info-value code">{{ ticketData.ticketNumber }}</span>
-              </div>
+            <h3>Datos de la Orden</h3>
+            <div class="info-grid order-grid">
               <div class="info-item">
                 <span class="info-label">Película:</span>
-                <span class="info-value">{{ ticketData.movieTitle }}</span>
+                <span class="info-value">{{ orderData?.movieTitle || 'N/A' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Cine:</span>
+                <span class="info-value">{{ orderData?.cinemaName || 'N/A' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Sala:</span>
+                <span class="info-value">{{ orderData?.roomName || 'N/A' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Formato:</span>
+                <span class="info-value">{{ orderData?.format || 'N/A' }}</span>
               </div>
               <div class="info-item">
                 <span class="info-label">Fecha:</span>
-                <span class="info-value">{{ ticketData.screeningDate }}</span>
+                <span class="info-value">{{ orderData?.screeningDate || 'N/A' }}</span>
               </div>
               <div class="info-item">
                 <span class="info-label">Hora:</span>
-                <span class="info-value">{{ ticketData.screeningTime }}</span>
+                <span class="info-value">{{ orderData?.screeningTime || 'N/A' }}</span>
               </div>
               <div class="info-item">
-                <span class="info-label">Asiento:</span>
-                <span class="info-value">{{ ticketData.seatNumber }}</span>
+                <span class="info-label">Entradas:</span>
+                <span class="info-value">{{ ticketsCountDisplay }}</span>
               </div>
               <div class="info-item">
-                <span class="info-label">Precio:</span>
-                <span class="info-value">{{ ticketData.price }} {{ currencyDisplay }}</span>
+                <span class="info-label">Total:</span>
+                <span class="info-value">{{ amountDisplay }} {{ currencyDisplay }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ticket-list-section">
+            <h3>Entradas</h3>
+            <div class="tickets-list">
+              <div v-for="ticket in ticketsData" :key="ticket.ticketNumber" class="ticket-item">
+                <div class="ticket-row">
+                  <span class="info-label">Número:</span>
+                  <span class="info-value code">{{ ticket.ticketNumber }}</span>
+                </div>
+                <div class="ticket-row">
+                  <span class="info-label">Asiento(s):</span>
+                  <span class="info-value">{{ ticket.seatNumber }}</span>
+                </div>
+                <div class="ticket-row">
+                  <span class="info-label">Precio:</span>
+                  <span class="info-value">{{ ticket.price }} {{ currencyDisplay }}</span>
+                </div>
+                <div class="ticket-row">
+                  <span class="info-label">Estado:</span>
+                  <span class="info-value">{{ ticket.statusText }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -93,17 +125,17 @@
           <button 
             @click="handlePrint" 
             class="btn btn-primary btn-large"
-            :disabled="isPrinting || requiresDeskAssistance || !ticketData"
+            :disabled="isPrinting || requiresDeskAssistance || !hasTickets"
           >
-            <span v-if="!isPrinting">Imprimir Entrada</span>
+            <span v-if="!isPrinting">{{ printButtonLabel }}</span>
             <span v-else>Imprimiendo...</span>
           </button>
           <button 
             @click="downloadTicket" 
             class="btn btn-secondary btn-large"
-            :disabled="requiresDeskAssistance || !ticketData"
+            :disabled="requiresDeskAssistance || !hasTickets"
           >
-            Descargar Entrada
+            {{ downloadButtonLabel }}
           </button>
           <router-link to="/" class="btn btn-tertiary btn-large">
             Volver al Inicio
@@ -166,8 +198,16 @@ const formatTimeFromIso = (isoDate) => {
 const normalizeTicket = (rawTicket, order) => {
   const details = Array.isArray(rawTicket?.details) ? rawTicket.details : []
   const seatCodes = details
-    .map((detail) => detail?.seat_code || `${detail?.row_number || ''}${detail?.seat_number || ''}`)
+    .map((detail) => detail?.seat_code || `F${detail?.row_number || ''}-S${detail?.seat_number || ''}`)
     .filter(Boolean)
+  const statusRaw = String(rawTicket?.status || '').toLowerCase()
+  const statusText = statusRaw === 'confirmed'
+    ? 'Confirmado'
+    : statusRaw === 'pending'
+      ? 'Pendiente'
+      : statusRaw === 'cancelled'
+        ? 'Cancelado'
+        : 'Pendiente'
 
   return {
     ticketNumber: String(rawTicket?.ticket_number || rawTicket?.id || 'N/A'),
@@ -175,7 +215,8 @@ const normalizeTicket = (rawTicket, order) => {
     screeningDate: formatDateFromIso(order?.screening?.start_time),
     screeningTime: formatTimeFromIso(order?.screening?.start_time),
     seatNumber: seatCodes.length ? seatCodes.join(', ') : 'N/A',
-    price: String(rawTicket?.price || '0.00')
+    price: String(rawTicket?.price || '0.00'),
+    statusText
   }
 }
 
@@ -206,6 +247,23 @@ const orderNumberDisplay = computed(() => {
 const amountDisplay = computed(() => {
   const amount = Number(paymentData.value?.amount ?? orderData.value?.totalAmount)
   return Number.isFinite(amount) ? amount.toFixed(2) : 'No disponible'
+})
+
+const hasTickets = computed(() => {
+  return ticketsData.value.length > 0 || !!ticketData.value
+})
+
+const ticketsCountDisplay = computed(() => {
+  const count = ticketsData.value.length || (ticketData.value ? 1 : 0)
+  return String(count)
+})
+
+const printButtonLabel = computed(() => {
+  return (ticketsData.value.length > 1 ? 'Imprimir Entradas' : 'Imprimir Entrada')
+})
+
+const downloadButtonLabel = computed(() => {
+  return (ticketsData.value.length > 1 ? 'Descargar Entradas' : 'Descargar Entrada')
 })
 
 const currencyDisplay = computed(() => {
@@ -239,7 +297,13 @@ onMounted(async () => {
   orderParam.value = route.query.order || route.params.order || ''
   orderData.value = {
     orderNumber: String(orderParam.value || 'N/A'),
-    currency: 'ARS'
+    currency: 'ARS',
+    movieTitle: '',
+    cinemaName: '',
+    roomName: '',
+    format: '',
+    screeningDate: '',
+    screeningTime: ''
   }
 
   // Si no hay número de orden no podemos consultar detalles
@@ -321,7 +385,13 @@ const loadTicketData = async () => {
     orderData.value = {
       orderNumber: String(rawOrder.order_number || orderParam.value),
       currency: String(rawOrder.currency || 'ARS'),
-      totalAmount: amountNumber
+      totalAmount: amountNumber,
+      movieTitle: String(rawOrder.screening?.movie?.title || 'N/A'),
+      cinemaName: String(rawOrder.screening?.room?.cinema?.name || 'N/A'),
+      roomName: String(rawOrder.screening?.room?.name || 'N/A'),
+      format: String(rawOrder.screening?.format || 'N/A'),
+      screeningDate: formatDateFromIso(rawOrder.screening?.start_time),
+      screeningTime: formatTimeFromIso(rawOrder.screening?.start_time)
     }
 
     paymentData.value = {
@@ -393,16 +463,38 @@ const handlePrint = async () => {
 }
 
 const downloadTicket = () => {
-  if (!ticketData.value || requiresDeskAssistance.value) return
+  if (!hasTickets.value || requiresDeskAssistance.value) return
+  const printableTickets = ticketsData.value.length ? ticketsData.value : [ticketData.value]
+  const rowsHtml = printableTickets
+    .map((ticket) => `
+      <tr>
+        <td style="padding: 8px; border: 1px solid #ddd;">${ticket.ticketNumber}</td>
+        <td style="padding: 8px; border: 1px solid #ddd;">${ticket.seatNumber}</td>
+        <td style="padding: 8px; border: 1px solid #ddd;">${ticket.price} ${currencyDisplay.value}</td>
+      </tr>
+    `)
+    .join('')
+
   // Función placeholder para descargar el ticket como PDF
   const html = `
     <div style="text-align: center; padding: 20px; font-family: Arial, sans-serif;">
-      <h1>CINEA - Entrada</h1>
-      <p><strong>${ticketData.value?.movieTitle || 'Película'}</strong></p>
+      <h1>CINEA - Entradas</h1>
+      <p><strong>${orderData.value?.movieTitle || ticketData.value?.movieTitle || 'Película'}</strong></p>
       <p>Número de orden: ${orderNumberDisplay.value}</p>
-      <p>Fecha: ${ticketData.value?.screeningDate || 'N/A'}</p>
-      <p>Hora: ${ticketData.value?.screeningTime || 'N/A'}</p>
-      <p>Asiento: ${ticketData.value?.seatNumber || 'N/A'}</p>
+      <p>Fecha: ${orderData.value?.screeningDate || ticketData.value?.screeningDate || 'N/A'}</p>
+      <p>Hora: ${orderData.value?.screeningTime || ticketData.value?.screeningTime || 'N/A'}</p>
+      <table style="margin: 16px auto; border-collapse: collapse; min-width: 420px;">
+        <thead>
+          <tr>
+            <th style="padding: 8px; border: 1px solid #ddd;">Ticket</th>
+            <th style="padding: 8px; border: 1px solid #ddd;">Asiento(s)</th>
+            <th style="padding: 8px; border: 1px solid #ddd;">Precio</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
     </div>
   `
 
@@ -535,6 +627,17 @@ h1 {
   margin-bottom: 1rem;
 }
 
+.ticket-list-section {
+  margin-top: 1.5rem;
+}
+
+.ticket-list-section h3 {
+  color: var(--primary, #667eea);
+  font-size: 1.05rem;
+  margin-top: 0;
+  margin-bottom: 0.8rem;
+}
+
 .info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -557,6 +660,30 @@ h1 {
 .info-value {
   color: #e0e0e0;
   font-size: 0.95rem;
+}
+
+.tickets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ticket-item {
+  padding: 0.9rem;
+  border: 1px solid rgba(102, 126, 234, 0.25);
+  border-radius: 8px;
+  background: rgba(45, 45, 45, 0.45);
+}
+
+.ticket-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.ticket-row:last-child {
+  margin-bottom: 0;
 }
 
 .info-value.code {

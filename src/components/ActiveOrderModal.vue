@@ -106,8 +106,13 @@ const handleContinue = () => {
   router.push('/checkout')
 }
 
-const handleRestart = async () => {
+const handleRestart = async (skipConfirmation = false) => {
   if (isRestarting.value) return
+
+  if (!skipConfirmation) {
+    const confirmed = window.confirm('¿Seguro que deseas empezar de nuevo? Se cancelará tu orden actual.')
+    if (!confirmed) return
+  }
 
   const orderNumber = session.value?.order_number
   if (!orderNumber) {
@@ -118,10 +123,15 @@ const handleRestart = async () => {
 
   isRestarting.value = true
   statusMessageType.value = 'info'
-  statusMessage.value = 'Cancelando reserva...'
+  statusMessage.value = 'Verificando estado del pago...'
 
   try {
-    const cancelResponse = await paymentMethodService.cancelOrderByNumber(orderNumber)
+    const paymentHandled = await checkPaidBeforeRestart()
+    if (paymentHandled) return
+
+    statusMessage.value = 'Cancelando reserva...'
+    const providerId = session.value?.provider_id
+    const cancelResponse = await paymentMethodService.cancelOrderByNumber(orderNumber, providerId)
 
     if (cancelResponse?.success) {
       cartStore.resetAll()
@@ -146,6 +156,48 @@ const handleRestart = async () => {
 const normalizePaymentStatus = (statusResponse) => {
   const rawStatus = statusResponse?.status || statusResponse?.payment?.status
   return typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : ''
+}
+
+const checkPaidBeforeRestart = async () => {
+  const paymentMethod = String(session.value?.payment_method || '').toLowerCase()
+  if (paymentMethod !== 'terminal') return false
+  if (!session.value?.payment_ticket_id) return false
+
+  try {
+    let statusResponse = null
+    try {
+      statusResponse = await paymentMethodService.manualCheckPayment({
+        payment_ticket_id: session.value.payment_ticket_id,
+        order_number: session.value.order_number,
+        order_id: session.value.order_id,
+        payment_provider_id: session.value.provider_id
+      })
+    } catch (manualErr) {
+      statusResponse = await paymentMethodService.monitorPayment(session.value.payment_ticket_id)
+      console.warn('Manual check endpoint no disponible; usando monitorPayment como fallback:', manualErr)
+    }
+
+    const normalizedStatus = normalizePaymentStatus(statusResponse)
+    if (normalizedStatus === 'completed' || normalizedStatus === 'approved') {
+      const orderNumber = session.value?.order_number || undefined
+      cartStore.clearPaymentSession()
+      router.push({
+        name: 'PaymentSuccess',
+        query: {
+          ticket: session.value.payment_ticket_id,
+          ...(orderNumber ? { order: orderNumber } : {})
+        }
+      })
+      return true
+    }
+
+    return false
+  } catch (err) {
+    console.warn('Error checking terminal payment status before restart:', err)
+    statusMessageType.value = 'error'
+    statusMessage.value = 'No se pudo verificar el estado del pago en terminal. Intenta de nuevo.'
+    return true
+  }
 }
 
 const handleManualPaymentCheck = async () => {
@@ -206,7 +258,7 @@ let expireCheckInterval = null
 
 const checkExpiration = () => {
   if (isVisible.value && secondsRemaining.value <= 0) {
-    handleRestart()
+    handleRestart(true)
   }
 }
 
