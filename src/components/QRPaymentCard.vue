@@ -33,7 +33,7 @@
       </div>
       <PaymentTicketDisplay
         :ticket-number="paymentTicketId"
-        :amount="amount"
+        :amount="displayAmount"
         payment-method="qr"
         :status-text="monitoring ? `Esperando confirmación... ${formatTime(effectiveTimeoutSeconds)}` : 'Escanea el código QR con tu celular'"
       />
@@ -94,7 +94,7 @@
       <h3>¡Pago realizado!</h3>
       <p>Tu transacción ha sido procesada exitosamente.</p>
       <div class="completion-details">
-        <p><strong>Monto:</strong> ${{ amount.toFixed(2) }}</p>
+        <p><strong>Monto:</strong> ${{ displayAmount.toFixed(2) }}</p>
         <p><strong>Referencia:</strong> {{ paymentTicketId }}</p>
       </div>
     </div>
@@ -133,6 +133,10 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  products: {
+    type: Array,
+    default: () => []
+  },
   customerEmail: {
     type: String,
     default: ''
@@ -160,6 +164,7 @@ const monitoring = ref(false)
 const isDownloading = ref(false)
 const showCopyTooltip = ref(false)
 const timeoutSeconds = ref(props.timeoutDuration)
+const payableAmount = ref(Number(props.amount) || 0)
 let monitoringInterval = null
 let timeoutInterval = null
 
@@ -176,13 +181,35 @@ const effectiveTimeoutSeconds = computed(() => {
   return hasSessionCountdown.value ? cartStore.secondsRemaining : timeoutSeconds.value
 })
 
+const displayAmount = computed(() => {
+  const amount = Number(payableAmount.value)
+  return Number.isFinite(amount) ? amount : 0
+})
+
 const normalizeSeatIds = (seatIds = []) => [...seatIds].map(id => String(id)).sort()
+const normalizeProducts = (products = []) => [...products]
+  .map(product => ({
+    code: String(product?.code || '').trim().toUpperCase(),
+    quantity: Number(product?.quantity) || 0
+  }))
+  .filter(product => product.code && product.quantity > 0)
+  .sort((a, b) => a.code.localeCompare(b.code))
 
 const isSameSeatSelection = (left = [], right = []) => {
   const a = normalizeSeatIds(left)
   const b = normalizeSeatIds(right)
   if (a.length !== b.length) return false
   return a.every((value, index) => value === b[index])
+}
+
+const isSameProductSelection = (left = [], right = []) => {
+  const a = normalizeProducts(left)
+  const b = normalizeProducts(right)
+  if (a.length !== b.length) return false
+  return a.every((product, index) => {
+    const other = b[index]
+    return product.code === other.code && product.quantity === other.quantity
+  })
 }
 
 const getIdempotencyKey = () => {
@@ -196,8 +223,9 @@ const getReusableOrderNumber = () => {
 
   const sameScreening = Number(session.screening_id) === Number(props.screeningId)
   const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+  const sameProducts = isSameProductSelection(session.products || [], props.products || [])
 
-  return sameScreening && sameSeats ? session.order_number : null
+  return sameScreening && sameSeats && sameProducts ? session.order_number : null
 }
 
 const canReuseActiveSession = () => {
@@ -208,10 +236,11 @@ const canReuseActiveSession = () => {
   const sameProvider = Number(session.provider_id) === Number(props.paymentProviderId)
   const sameScreening = Number(session.screening_id) === Number(props.screeningId)
   const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+  const sameProducts = isSameProductSelection(session.products || [], props.products || [])
   const hasTicket = !!session.payment_ticket_id
   const hasQrData = !!session.qr_data
 
-  return sameMethod && sameProvider && sameScreening && sameSeats && hasTicket && hasQrData
+  return sameMethod && sameProvider && sameScreening && sameSeats && sameProducts && hasTicket && hasQrData
 }
 
 const restoreSession = () => {
@@ -219,10 +248,13 @@ const restoreSession = () => {
   if (!session) return false
 
   paymentTicketId.value = session.payment_ticket_id
+  payableAmount.value = Number.isFinite(Number(session.total_price))
+    ? Number(session.total_price)
+    : Number(props.amount) || 0
   qrData.value = {
     method: 'qr',
     qr_data: session.qr_data,
-    amount: props.amount,
+    amount: payableAmount.value,
     reference: session.payment_ticket_id
   }
   qrImageUrl.value = session.qr_data
@@ -259,11 +291,13 @@ const generateQR = async () => {
     const reusableOrderNumber = getReusableOrderNumber()
     const sessionOrderNumber = cartStore.currentSession?.order_number || null
     const idempotencyKey = getIdempotencyKey()
+    const selectedProducts = normalizeProducts(props.products || [])
     // Procesar pago QR en backend
     const response = await paymentMethodService.processQrPayment({
       payment_provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
+      products: selectedProducts,
       order_number: reusableOrderNumber || sessionOrderNumber || null,
       idempotency_key: idempotencyKey || undefined,
       customer_email: props.customerEmail || 'default@gmail.com',
@@ -284,16 +318,37 @@ const generateQR = async () => {
       provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
+      products: normalizeProducts(response.products || selectedProducts),
       qr_data: response.qr_data,
-      idempotency_key: response.idempotency_key || idempotencyKey || undefined
+      idempotency_key: response.idempotency_key || idempotencyKey || undefined,
+      total_price: Number.isFinite(Number(response.total_price))
+        ? Number(response.total_price)
+        : undefined,
+      base_subtotal: Number.isFinite(Number(response.base_subtotal))
+        ? Number(response.base_subtotal)
+        : undefined,
+      total_discount: Number.isFinite(Number(response.total_discount))
+        ? Number(response.total_discount)
+        : undefined,
+      applied_promotions: Array.isArray(response.applied_promotions)
+        ? response.applied_promotions
+        : [],
+      order_items: Array.isArray(response.order_items)
+        ? response.order_items
+        : []
     })
+
+    const backendTotal = Number(response.total_price)
+    payableAmount.value = Number.isFinite(backendTotal)
+      ? backendTotal
+      : Number(props.amount) || 0
 
     // Guardar datos del pago
     paymentTicketId.value = response.payment_ticket_id
     qrData.value = {
       method: 'qr',
       qr_data: response.qr_data,
-      amount: props.amount,
+      amount: payableAmount.value,
       reference: paymentTicketId.value
     }
 
@@ -319,11 +374,11 @@ const generateQR = async () => {
     qrData.value = {
       method: 'qr',
       qr_data: JSON.stringify({
-        amount: props.amount,
+        amount: displayAmount.value,
         reference: paymentTicketId.value,
         email: props.customerEmail
       }),
-      amount: props.amount,
+      amount: displayAmount.value,
       reference: paymentTicketId.value
     }
 
@@ -362,7 +417,7 @@ const startMonitoring = () => {
         clearInterval(timeoutInterval)
         emit('payment-success', {
           paymentTicketId: paymentTicketId.value,
-          amount: props.amount
+          amount: displayAmount.value
         })
       }
     } catch (err) {
@@ -429,7 +484,7 @@ const downloadQR = async () => {
  */
 const copyQRData = async () => {
   try {
-    const dataText = `Referencia: ${paymentTicketId.value}\nMonto: $${props.amount.toFixed(2)}`
+    const dataText = `Referencia: ${paymentTicketId.value}\nMonto: $${displayAmount.value.toFixed(2)}`
     await navigator.clipboard.writeText(dataText)
     showCopyTooltip.value = true
     setTimeout(() => {

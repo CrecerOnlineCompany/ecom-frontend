@@ -2,13 +2,32 @@ import api from './api'
 
 // Helper para extraer datos de respuesta paginada o directa
 const extractData = (response) => {
-  if (response.data && Array.isArray(response.data)) {
-    return response.data
-  }
+  if (!response) return []
+
+  // axios payload directo
   if (Array.isArray(response)) {
     return response
   }
-  return response
+
+  // formato paginado Laravel: { data: [...] }
+  if (Array.isArray(response.data)) {
+    return response.data
+  }
+
+  // formato envoltorio API: { success: true, data: [...] }
+  if (response.success && Array.isArray(response.data)) {
+    return response.data
+  }
+
+  // fallback: arrays comunes en APIs
+  if (Array.isArray(response.items)) {
+    return response.items
+  }
+  if (Array.isArray(response.results)) {
+    return response.results
+  }
+
+  return []
 }
 
 // Cines
@@ -172,5 +191,9 @@ export const ticketService = {
       console.error('Error canceling ticket:', error)
       throw error
     }
-  }
+  },
+  // Alias de compatibilidad (MyTickets.vue)
+  cancelTicket: async (id) => {
+    return ticketService.cancel(id)
+  },
 }

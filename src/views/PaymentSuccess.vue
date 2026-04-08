@@ -118,6 +118,9 @@
             <li>Presenta tu entrada en la taquilla del cine</li>
             <li>Llega 15 minutos antes de que comience la función</li>
           </ol>
+          <p class="auto-redirect-note">
+            Esta pantalla se cerrará automáticamente en {{ redirectCountdownLabel }} y te llevaremos al inicio.
+          </p>
         </div>
 
         <!-- Action Buttons -->
@@ -159,13 +162,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { printService } from '@/services/printService'
 import { paymentService } from '@/services/paymentService'
 import { useCartStore } from '@/stores/cartStore'
 
 const route = useRoute()
+const router = useRouter()
 const cartStore = useCartStore()
 
 const ticketParam = ref('')
@@ -180,6 +184,10 @@ const printMessageType = ref('info')
 const orderData = ref(null)
 const paymentData = ref(null)
 const requiresDeskAssistance = ref(false)
+const REDIRECT_SECONDS = 120
+const redirectSecondsLeft = ref(REDIRECT_SECONDS)
+let redirectIntervalId = null
+let redirectTimeoutId = null
 
 const formatDateFromIso = (isoDate) => {
   if (!isoDate) return 'N/A'
@@ -195,11 +203,38 @@ const formatTimeFromIso = (isoDate) => {
   return date.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
 }
 
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return ['1', 'true', 'yes', 'si', 'sí'].includes(normalized)
+  }
+  return false
+}
+
+const resolveSeatLabelFromDetail = (detail) => {
+  if (normalizeBoolean(detail?.non_number)) return 'S/N'
+  return detail?.seat_code || `F${detail?.row_number || ''}-S${detail?.seat_number || ''}`
+}
+
+const buildSeatNumberDisplay = (details = []) => {
+  const seatCodes = details
+    .map((detail) => resolveSeatLabelFromDetail(detail))
+    .filter(Boolean)
+
+  if (!seatCodes.length) return 'N/A'
+
+  const uniqueSeatCodes = [...new Set(seatCodes)]
+  if (uniqueSeatCodes.length === 1 && uniqueSeatCodes[0] === 'S/N' && seatCodes.length > 1) {
+    return `S/N x${seatCodes.length}`
+  }
+
+  return seatCodes.join(', ')
+}
+
 const normalizeTicket = (rawTicket, order) => {
   const details = Array.isArray(rawTicket?.details) ? rawTicket.details : []
-  const seatCodes = details
-    .map((detail) => detail?.seat_code || `F${detail?.row_number || ''}-S${detail?.seat_number || ''}`)
-    .filter(Boolean)
   const statusRaw = String(rawTicket?.status || '').toLowerCase()
   const statusText = statusRaw === 'confirmed'
     ? 'Confirmado'
@@ -214,7 +249,7 @@ const normalizeTicket = (rawTicket, order) => {
     movieTitle: String(order?.screening?.movie?.title || 'Película'),
     screeningDate: formatDateFromIso(order?.screening?.start_time),
     screeningTime: formatTimeFromIso(order?.screening?.start_time),
-    seatNumber: seatCodes.length ? seatCodes.join(', ') : 'N/A',
+    seatNumber: buildSeatNumberDisplay(details),
     price: String(rawTicket?.price || '0.00'),
     statusText
   }
@@ -274,6 +309,13 @@ const paymentStatusDisplay = computed(() => {
   return normalizePaymentStatusText(paymentData.value?.status)
 })
 
+const redirectCountdownLabel = computed(() => {
+  const totalSeconds = Math.max(0, Number(redirectSecondsLeft.value) || 0)
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0')
+  const seconds = String(totalSeconds % 60).padStart(2, '0')
+  return `${minutes}:${seconds}`
+})
+
 const normalizeOrderNumber = (value) => {
   return String(value || '').trim()
 }
@@ -291,7 +333,39 @@ const clearCartIfMatchingOrder = (resolvedOrderNumber) => {
   cartStore.clearPaymentSession()
 }
 
+const clearRedirectTimers = () => {
+  if (redirectIntervalId) {
+    clearInterval(redirectIntervalId)
+    redirectIntervalId = null
+  }
+  if (redirectTimeoutId) {
+    clearTimeout(redirectTimeoutId)
+    redirectTimeoutId = null
+  }
+}
+
+const scheduleAutoRedirect = () => {
+  clearRedirectTimers()
+  redirectSecondsLeft.value = REDIRECT_SECONDS
+
+  redirectIntervalId = setInterval(() => {
+    if (redirectSecondsLeft.value <= 1) {
+      redirectSecondsLeft.value = 0
+      clearRedirectTimers()
+      return
+    }
+    redirectSecondsLeft.value -= 1
+  }, 1000)
+
+  redirectTimeoutId = setTimeout(async () => {
+    clearRedirectTimers()
+    await router.push('/')
+  }, REDIRECT_SECONDS * 1000)
+}
+
 onMounted(async () => {
+  scheduleAutoRedirect()
+
   // Obtén el número de ticket de los parámetros
   ticketParam.value = route.query.ticket || route.params.ticket || 'N/A'
   orderParam.value = route.query.order || route.params.order || ''
@@ -319,6 +393,10 @@ onMounted(async () => {
 
   // Auto-scroll hacia el top
   window.scrollTo(0, 0)
+})
+
+onUnmounted(() => {
+  clearRedirectTimers()
 })
 
 const persistTickets = (tickets = []) => {
@@ -465,37 +543,192 @@ const handlePrint = async () => {
 const downloadTicket = () => {
   if (!hasTickets.value || requiresDeskAssistance.value) return
   const printableTickets = ticketsData.value.length ? ticketsData.value : [ticketData.value]
+  const currencyCode = String(currencyDisplay.value || 'ARS').toUpperCase()
+  const localeByCurrency = {
+    ARS: 'es-AR',
+    USD: 'en-US',
+    EUR: 'es-ES'
+  }
+  const formatter = new Intl.NumberFormat(localeByCurrency[currencyCode] || 'es-AR', {
+    style: 'currency',
+    currency: currencyCode,
+    minimumFractionDigits: 2
+  })
+  const ticketNumbers = printableTickets
+    .map(ticket => ticket?.ticketNumber)
+    .filter(Boolean)
+    .join(', ')
+  const formatPrice = (value) => {
+    const amount = Number(value)
+    return Number.isFinite(amount) ? formatter.format(amount) : formatter.format(0)
+  }
   const rowsHtml = printableTickets
     .map((ticket) => `
       <tr>
-        <td style="padding: 8px; border: 1px solid #ddd;">${ticket.ticketNumber}</td>
-        <td style="padding: 8px; border: 1px solid #ddd;">${ticket.seatNumber}</td>
-        <td style="padding: 8px; border: 1px solid #ddd;">${ticket.price} ${currencyDisplay.value}</td>
+        <td style="padding: 12px 14px; border: 1px solid #dbe3ef;">${ticket.ticketNumber}</td>
+        <td style="padding: 12px 14px; border: 1px solid #dbe3ef;">${ticket.seatNumber}</td>
+        <td style="padding: 12px 14px; border: 1px solid #dbe3ef; text-align: right; font-variant-numeric: tabular-nums;">${formatPrice(ticket.price)}</td>
       </tr>
     `)
     .join('')
 
-  // Función placeholder para descargar el ticket como PDF
   const html = `
-    <div style="text-align: center; padding: 20px; font-family: Arial, sans-serif;">
-      <h1>CINEA - Entradas</h1>
-      <p><strong>${orderData.value?.movieTitle || ticketData.value?.movieTitle || 'Película'}</strong></p>
-      <p>Número de orden: ${orderNumberDisplay.value}</p>
-      <p>Fecha: ${orderData.value?.screeningDate || ticketData.value?.screeningDate || 'N/A'}</p>
-      <p>Hora: ${orderData.value?.screeningTime || ticketData.value?.screeningTime || 'N/A'}</p>
-      <table style="margin: 16px auto; border-collapse: collapse; min-width: 420px;">
-        <thead>
-          <tr>
-            <th style="padding: 8px; border: 1px solid #ddd;">Ticket</th>
-            <th style="padding: 8px; border: 1px solid #ddd;">Asiento(s)</th>
-            <th style="padding: 8px; border: 1px solid #ddd;">Precio</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
-    </div>
+    <!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Entrada ${orderNumberDisplay.value}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            background: #f3f6fb;
+            color: #0f172a;
+            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.45;
+            padding: 32px;
+          }
+          .doc {
+            max-width: 840px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid #d6deeb;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+          }
+          .header {
+            background: #17336d;
+            color: #ffffff;
+            padding: 22px 26px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 26px;
+            letter-spacing: 0.3px;
+          }
+          .header p {
+            margin: 8px 0 0;
+            opacity: 0.95;
+            font-size: 16px;
+          }
+          .content {
+            padding: 24px 26px 28px;
+          }
+          .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+            font-size: 14px;
+          }
+          .info-card {
+            background: #f8fafc;
+            border: 1px solid #dbe3ef;
+            border-radius: 10px;
+            padding: 12px;
+          }
+          .info-card.total {
+            background: #ecfdf5;
+            border-color: #86efac;
+          }
+          .label {
+            color: #334155;
+            font-weight: 600;
+          }
+          .value-strong {
+            font-size: 20px;
+            font-weight: 700;
+            color: #166534;
+            display: inline-block;
+            margin-top: 4px;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+          }
+          thead tr {
+            background: #eef3fb;
+          }
+          th {
+            padding: 12px 14px;
+            border: 1px solid #dbe3ef;
+            text-align: left;
+            font-weight: 700;
+            color: #1e293b;
+          }
+          th:last-child { text-align: right; }
+          .footer-note {
+            margin-top: 16px;
+            color: #64748b;
+            font-size: 12px;
+            text-align: right;
+          }
+          @media print {
+            body {
+              background: #ffffff;
+              padding: 10mm;
+            }
+            .doc {
+              max-width: none;
+              box-shadow: none;
+              border: 1px solid #c9d4e5;
+            }
+            .content {
+              padding: 18px 20px;
+            }
+            .info-grid {
+              gap: 10px;
+              margin-bottom: 14px;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="doc">
+          <div class="header">
+            <h1>CINEA - Entradas</h1>
+            <p><strong>${orderData.value?.movieTitle || ticketData.value?.movieTitle || 'Película'}</strong></p>
+          </div>
+
+          <div class="content">
+            <div class="info-grid">
+              <div class="info-card">
+                <span class="label">Número de orden:</span><br>${orderNumberDisplay.value}
+              </div>
+              <div class="info-card">
+                <span class="label">Número(s) de ticket:</span><br>${ticketNumbers || 'N/A'}
+              </div>
+              <div class="info-card">
+                <span class="label">Fecha:</span> ${orderData.value?.screeningDate || ticketData.value?.screeningDate || 'N/A'}<br>
+                <span class="label">Hora:</span> ${orderData.value?.screeningTime || ticketData.value?.screeningTime || 'N/A'}
+              </div>
+              <div class="info-card total">
+                <span class="label">Total:</span><br>
+                <span class="value-strong">${formatPrice(paymentData.value?.amount ?? orderData.value?.totalAmount)}</span>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Ticket</th>
+                  <th>Asiento(s)</th>
+                  <th>Precio</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+            <p class="footer-note">Moneda: ${currencyCode}</p>
+          </div>
+        </div>
+      </body>
+    </html>
   `
 
   const blob = new Blob([html], { type: 'text/html' })
@@ -773,6 +1006,12 @@ h1 {
 .next-steps li {
   margin-bottom: 0.5rem;
   line-height: 1.6;
+}
+
+.auto-redirect-note {
+  margin: 1rem 0 0;
+  color: #c7d2fe;
+  font-size: 0.95rem;
 }
 
 .action-buttons {

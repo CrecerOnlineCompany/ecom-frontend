@@ -41,10 +41,14 @@ class PaymentMethodService {
         payment_provider_id: paymentData.payment_provider_id,
         screening_id: paymentData.screening_id,
         seat_ids: paymentData.seat_ids,
+        products: paymentData.products,
         order_number: paymentData.order_number,
         idempotency_key: paymentData.idempotency_key,
         customer_email: paymentData.customer_email,
-        customer_name: paymentData.customer_name
+        customer_name: paymentData.customer_name,
+        additional_data: {
+          products: paymentData.products
+        }
       })
 
       if (response?.data?.success === false) {
@@ -62,6 +66,12 @@ class PaymentMethodService {
         reserved_until: response.data.reserved_until,
         payment_ticket_id: response.data.payment_ticket_id,
         idempotency_key: response.data.idempotency_key,
+        total_price: response.data.total_price,
+        base_subtotal: response.data.base_subtotal,
+        total_discount: response.data.total_discount,
+        applied_promotions: response.data.applied_promotions,
+        products: response.data.products,
+        order_items: response.data.order_items,
         qr_data: response.data.qr_data || response.data.qr_code,
         error_code: response.data.error_code,
         message: response.data.message
@@ -81,10 +91,14 @@ class PaymentMethodService {
         payment_provider_id: paymentData.payment_provider_id,
         screening_id: paymentData.screening_id,
         seat_ids: paymentData.seat_ids,
+        products: paymentData.products,
         order_number: paymentData.order_number,
         idempotency_key: paymentData.idempotency_key,
         customer_email: paymentData.customer_email,
-        customer_name: paymentData.customer_name
+        customer_name: paymentData.customer_name,
+        additional_data: {
+          products: paymentData.products
+        }
       })
 
       if (response?.data?.success === false) {
@@ -102,6 +116,12 @@ class PaymentMethodService {
         reserved_until: response.data.reserved_until,
         payment_ticket_id: response.data.payment_ticket_id,
         idempotency_key: response.data.idempotency_key,
+        total_price: response.data.total_price,
+        base_subtotal: response.data.base_subtotal,
+        total_discount: response.data.total_discount,
+        applied_promotions: response.data.applied_promotions,
+        products: response.data.products,
+        order_items: response.data.order_items,
         error_code: response.data.error_code,
         message: response.data.message
       }

@@ -62,6 +62,26 @@ export const paymentService = {
   },
 
   /**
+   * Obtener catálogo de productos de candy bar (pochoclos, combos, etc.)
+   * @returns {Promise<Array>}
+   */
+  async getConcessionProducts() {
+    try {
+      const response = await api.get('/concession-products')
+      const data = response?.data
+
+      if (Array.isArray(data)) return data
+      if (Array.isArray(data?.products)) return data.products
+      if (data?.success && Array.isArray(data?.data)) return data.data
+
+      return []
+    } catch (error) {
+      console.error('Error fetching concession products:', error)
+      return []
+    }
+  },
+
+  /**
    * Procesar un pago: Crea ticket Y procesa pago
    * @param {Object} paymentData - {screening_id, seat_id, payment_provider_id, customer_email, customer_name, customer_phone}
    * @returns {Promise<Object>}
@@ -90,6 +110,21 @@ export const paymentService = {
       return response.data
     } catch (error) {
       console.error('Error processing batch payment:', error)
+      throw error
+    }
+  },
+
+  /**
+   * Previsualizar pricing (incluye promociones automáticas)
+   * @param {Object} payload - {screening_id, seat_ids, promotion_code?}
+   * @returns {Promise<Object>}
+   */
+  async previewPricing(payload = {}) {
+    try {
+      const response = await api.post('/payment-pricing-preview', payload)
+      return response.data
+    } catch (error) {
+      console.error('Error previewing pricing:', error)
       throw error
     }
   },

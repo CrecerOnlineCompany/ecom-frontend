@@ -19,7 +19,7 @@
       <!-- Ticket Display with Instructions -->
       <PaymentTicketDisplay
         :ticket-number="orderId"
-        :amount="amount"
+        :amount="displayAmount"
         payment-method="terminal"
         :status-text="getStatusText(currentStatus)"
       />
@@ -31,7 +31,7 @@
           <div class="display-content">
             <div class="terminal-amount">
               <span class="currency">$</span>
-              <span class="amount">{{ amount.toFixed(2) }}</span>
+              <span class="amount">{{ displayAmount.toFixed(2) }}</span>
             </div>
             <p class="display-status">{{ displayStatus }}</p>
           </div>
@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { paymentMethodService } from '@/services/PaymentMethodService'
 import { useCartStore } from '@/stores/cartStore'
 import { processPaymentErrorMessage } from '@/utils/errorHelpers'
@@ -72,6 +72,10 @@ const props = defineProps({
   seatIds: {
     type: Array,
     required: true
+  },
+  products: {
+    type: Array,
+    default: () => []
   },
   terminalId: {
     type: String,
@@ -102,6 +106,7 @@ const orderId = ref(null)
 const currentStatus = ref('waiting') // waiting, processing, completed, rejected
 const rejectionReason = ref('')
 const timeoutSeconds = ref(props.timeoutDuration)
+const payableAmount = ref(Number(props.amount) || 0)
 let monitoringInterval = null
 let timeoutInterval = null
 
@@ -113,13 +118,35 @@ const statusMessages = {
   rejected: '✗ Rechazado'
 }
 
+const displayAmount = computed(() => {
+  const amount = Number(payableAmount.value)
+  return Number.isFinite(amount) ? amount : 0
+})
+
 const normalizeSeatIds = (seatIds = []) => [...seatIds].map(id => String(id)).sort()
+const normalizeProducts = (products = []) => [...products]
+  .map(product => ({
+    code: String(product?.code || '').trim().toUpperCase(),
+    quantity: Number(product?.quantity) || 0
+  }))
+  .filter(product => product.code && product.quantity > 0)
+  .sort((a, b) => a.code.localeCompare(b.code))
 
 const isSameSeatSelection = (left = [], right = []) => {
   const a = normalizeSeatIds(left)
   const b = normalizeSeatIds(right)
   if (a.length !== b.length) return false
   return a.every((value, index) => value === b[index])
+}
+
+const isSameProductSelection = (left = [], right = []) => {
+  const a = normalizeProducts(left)
+  const b = normalizeProducts(right)
+  if (a.length !== b.length) return false
+  return a.every((product, index) => {
+    const other = b[index]
+    return product.code === other.code && product.quantity === other.quantity
+  })
 }
 
 const getIdempotencyKey = () => {
@@ -133,8 +160,9 @@ const getReusableOrderNumber = () => {
 
   const sameScreening = Number(session.screening_id) === Number(props.screeningId)
   const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+  const sameProducts = isSameProductSelection(session.products || [], props.products || [])
 
-  return sameScreening && sameSeats ? session.order_number : null
+  return sameScreening && sameSeats && sameProducts ? session.order_number : null
 }
 
 const canReuseActiveSession = () => {
@@ -145,9 +173,10 @@ const canReuseActiveSession = () => {
   const sameProvider = Number(session.provider_id) === Number(props.paymentProviderId)
   const sameScreening = Number(session.screening_id) === Number(props.screeningId)
   const sameSeats = isSameSeatSelection(session.seat_ids || [], props.seatIds)
+  const sameProducts = isSameProductSelection(session.products || [], props.products || [])
   const hasTicket = !!session.payment_ticket_id
 
-  return sameMethod && sameProvider && sameScreening && sameSeats && hasTicket
+  return sameMethod && sameProvider && sameScreening && sameSeats && sameProducts && hasTicket
 }
 
 const restoreSession = () => {
@@ -155,6 +184,9 @@ const restoreSession = () => {
   if (!session) return false
 
   orderId.value = session.order_id || session.order_number
+  payableAmount.value = Number.isFinite(Number(session.total_price))
+    ? Number(session.total_price)
+    : Number(props.amount) || 0
   orderInitialized.value = true
   currentStatus.value = 'waiting'
   displayStatus.value = 'Acerca tu tarjeta'
@@ -178,11 +210,13 @@ const initializeTerminal = async () => {
     const reusableOrderNumber = getReusableOrderNumber()
     const sessionOrderNumber = cartStore.currentSession?.order_number || null
     const idempotencyKey = getIdempotencyKey()
+    const selectedProducts = normalizeProducts(props.products || [])
     // Procesar pago terminal en backend
     const response = await paymentMethodService.processTerminalPayment({
       payment_provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
+      products: selectedProducts,
       order_number: reusableOrderNumber || sessionOrderNumber || null,
       idempotency_key: idempotencyKey || undefined,
       customer_email: props.customerEmail || 'default@gmail.com',
@@ -203,8 +237,29 @@ const initializeTerminal = async () => {
       provider_id: props.paymentProviderId,
       screening_id: props.screeningId,
       seat_ids: props.seatIds,
-      idempotency_key: response.idempotency_key || idempotencyKey || undefined
+      products: normalizeProducts(response.products || selectedProducts),
+      idempotency_key: response.idempotency_key || idempotencyKey || undefined,
+      total_price: Number.isFinite(Number(response.total_price))
+        ? Number(response.total_price)
+        : undefined,
+      base_subtotal: Number.isFinite(Number(response.base_subtotal))
+        ? Number(response.base_subtotal)
+        : undefined,
+      total_discount: Number.isFinite(Number(response.total_discount))
+        ? Number(response.total_discount)
+        : undefined,
+      applied_promotions: Array.isArray(response.applied_promotions)
+        ? response.applied_promotions
+        : [],
+      order_items: Array.isArray(response.order_items)
+        ? response.order_items
+        : []
     })
+
+    const backendTotal = Number(response.total_price)
+    payableAmount.value = Number.isFinite(backendTotal)
+      ? backendTotal
+      : Number(props.amount) || 0
 
     // Guardar datos de la orden
     orderId.value = response.order_id
@@ -252,7 +307,7 @@ const startMonitoring = () => {
           emit('payment-success', {
             orderId: orderId.value,
             paymentTicketId,
-            amount: props.amount
+            amount: displayAmount.value
           })
         } else if (normalizedStatus === 'rejected' || normalizedStatus === 'declined') {
           currentStatus.value = 'rejected'

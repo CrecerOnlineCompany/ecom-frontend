@@ -54,7 +54,7 @@
         >
           <div class="movie-poster">
             <img 
-              :src="movie.poster_url || moviePosterPlaceholder" 
+              :src="getMoviePoster(movie)" 
               :alt="movie.title"
               @error="handleImageError"
             >
@@ -65,7 +65,7 @@
           <div class="movie-info">
             <h3>{{ movie.title }}</h3>
             <p class="genre">{{ movie.genre }}</p>
-            <p class="synopsis">{{ movie.synopsis }}</p>
+            <p class="synopsis">{{ movie.synopsis || movie.description || '' }}</p>
             <div class="movie-meta">
               <span class="rating">⭐ {{ movie.rating || 'N/A' }}</span>
               <span class="duration">{{ movie.duration }} min</span>
@@ -156,6 +156,23 @@ const resetFilters = () => {
   selectedGenre.value = ''
   selectedCinema.value = ''
   router.push('/movies')
+}
+
+const getMoviePoster = (movie) => {
+  const rawUrl = (
+    movie?.poster_image_url ||
+    movie?.posterImageUrl ||
+    movie?.poster_url ||
+    movie?.posterUrl ||
+    ''
+  )
+
+  if (typeof rawUrl !== 'string') return moviePosterPlaceholder
+  const url = rawUrl.trim()
+  if (!url) return moviePosterPlaceholder
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url
+  if (url.startsWith('/')) return `${window.location.origin}${url}`
+  return moviePosterPlaceholder
 }
 
 const handleImageError = (event) => {

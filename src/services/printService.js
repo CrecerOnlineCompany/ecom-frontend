@@ -74,7 +74,7 @@ export const printService = {
       ticketsData.forEach((ticket, index) => {
         html += this.generateThermalTicketContent(ticket);
         if (index < ticketsData.length - 1) {
-          html += '<div style="page-break-after: always; margin-top: 20px;"></div>';
+          html += '<div class="ticket-break"></div>';
         }
       });
 
@@ -203,29 +203,30 @@ export const printService = {
 
       body {
         font-family: 'Courier New', monospace;
-        width: 80mm;
-        padding: 0;
-        margin: 0;
+        width: 72mm;
+        max-width: 72mm;
+        margin: 0 auto;
+        padding: 1.5mm 0 0;
         background: white;
+        color: #000;
       }
 
       @page {
-        size: 80mm 200mm;
-        margin: 0;
-        padding: 0;
+        size: 80mm auto;
+        margin: 1.5mm;
       }
 
       .thermal-ticket {
         width: 100%;
-        padding: 2mm 2mm;
+        padding: 1.5mm 1mm 2mm;
         text-align: center;
         font-size: 10pt;
-        line-height: 1.3;
+        line-height: 1.2;
       }
 
       .thermal-header {
-        margin-bottom: 5mm;
-        padding-bottom: 3mm;
+        margin-bottom: 3.2mm;
+        padding-bottom: 2mm;
         border-bottom: 1px solid #000;
       }
 
@@ -244,14 +245,14 @@ export const printService = {
       .thermal-divider {
         text-align: center;
         font-size: 9pt;
-        margin: 3mm 0;
+        margin: 2mm 0;
         letter-spacing: 1px;
       }
 
       .thermal-section {
-        margin: 3mm 0;
+        margin: 2.2mm 0;
         text-align: left;
-        padding: 0 2mm;
+        padding: 0 0.8mm;
       }
 
       .thermal-label {
@@ -273,7 +274,7 @@ export const printService = {
 
       .thermal-row {
         display: flex;
-        gap: 5mm;
+        gap: 2mm;
       }
 
       .thermal-col {
@@ -284,8 +285,8 @@ export const printService = {
         font-family: 'Code 128', 'Courier New', monospace;
         font-size: 20pt;
         font-weight: bold;
-        letter-spacing: 2px;
-        margin: 2mm 0;
+        letter-spacing: 1.3px;
+        margin: 1.2mm 0;
         word-break: break-all;
       }
 
@@ -296,8 +297,8 @@ export const printService = {
       }
 
       .thermal-footer {
-        margin-top: 3mm;
-        padding-top: 2mm;
+        margin-top: 2.2mm;
+        padding-top: 1.5mm;
         border-top: 1px solid #000;
       }
 
@@ -307,13 +308,17 @@ export const printService = {
         margin: 1mm 0;
       }
 
+      .ticket-break {
+        height: 3mm;
+        page-break-after: always;
+      }
+
       @media print {
         body {
-          margin: 0;
+          width: 72mm;
+          max-width: 72mm;
+          margin: 0 auto;
           padding: 0;
-        }
-        .thermal-ticket {
-          page-break-after: always;
         }
       }
     `;

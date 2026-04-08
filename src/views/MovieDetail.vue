@@ -39,38 +39,43 @@
           </div>
 
           <!-- Available Dates Selector -->
-          <div v-if="groupedScreenings.length > 0" class="available-dates">
+          <div class="available-dates">
             <h3>Funciones disponibles:</h3>
-            <div class="dates-selector">
-              <div 
-                v-for="dateGroup in groupedScreenings" 
-                :key="dateGroup.date"
-                class="date-card"
-              >
-                <div class="date-header-card">
-                  <span class="date-day">{{ getDateDay(dateGroup.date) }}</span>
-                  <span class="date-label">{{ getDateLabel(dateGroup.date) }}</span>
-                </div>
-                <div class="screenings-preview">
-                  <button 
-                    v-for="screening in dateGroup.screenings.slice(0, 2)"
-                    :key="screening.id"
-                    class="screening-preview-btn"
-                    @click="goToBooking(screening.id)"
-                  >
-                    <div class="preview-time">{{ formatTime(screening.start_time) }}</div>
-                    <div class="preview-format" v-if="screening.format">{{ screening.format }}</div>
-                    <div class="preview-room"> {{ screening.room.name }}</div>
-                  </button>
-                  <button 
-                    v-if="dateGroup.screenings.length > 2"
-                    class="screening-preview-btn more-btn"
-                    @click="scrollToDate(dateGroup.date)"
-                  >
-                    <div class="preview-more">+{{ dateGroup.screenings.length - 2 }} más</div>
-                  </button>
+            <div v-if="screeningsLoading" class="loading">
+              Cargando funciones...
+            </div>
+
+            <div v-else-if="groupedScreenings.length > 0">
+              <div v-for="dateGroup in groupedScreenings" :key="dateGroup.date" class="date-group">
+                <h3 class="date-header">{{ formatDate(dateGroup.date) }}</h3>
+
+                <div v-for="cinemaGroup in dateGroup.cinemaGroups" :key="cinemaGroup.key" class="cinema-group">
+                  <h4 class="cinema-group-header">Funciones disponibles {{ cinemaGroup.name }}</h4>
+
+                  <div class="screenings-grid">
+                    <div 
+                      v-for="screening in cinemaGroup.screenings" 
+                      :key="screening.id"
+                      class="screening-card"
+                      @click="goToBooking(screening.id)"
+                    >
+                      <div class="cinema-name">{{ getScreeningCinemaName(screening) }}</div>
+                      <div class="room-name">Sala {{ getScreeningRoomName(screening) }}</div>
+                      <div class="time">{{ formatTime(screening.start_time) }}</div>
+                      <div class="available-seats">
+                        {{ screening.available_seats }} asientos
+                      </div>
+                      <button class="btn btn-primary">
+                        Comprar Entrada
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
+            </div>
+
+            <div v-else class="no-data">
+              No hay funciones disponibles para esta película
             </div>
           </div>
 
@@ -81,44 +86,6 @@
         </div>
       </div>
 
-      <!-- Screenings Section -->
-      <section class="screenings-section">
-        <h2>Funciones Disponibles</h2>
-
-        <div v-if="screeningsLoading" class="loading">
-          Cargando funciones...
-        </div>
-
-        <div v-else-if="groupedScreenings.length > 0">
-          <!-- Group by date -->
-          <div v-for="dateGroup in groupedScreenings" :key="dateGroup.date" class="date-group" :data-date="dateGroup.date">
-            <h3 class="date-header">{{ formatDate(dateGroup.date) }}</h3>
-            
-            <div class="screenings-grid">
-              <div 
-                v-for="screening in dateGroup.screenings" 
-                :key="screening.id"
-                class="screening-card"
-                @click="goToBooking(screening.id)"
-              >
-                <div class="cinema-name">{{ screening.cinema_name }}</div>
-                <div class="room-name">Sala {{ screening.room_number }}</div>
-                <div class="time">{{ formatTime(screening.start_time) }}</div>
-                <div class="available-seats">
-                  {{ screening.available_seats }} asientos
-                </div>
-                <button class="btn btn-primary">
-                  Comprar Entrada
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="no-data">
-          No hay funciones disponibles para esta película
-        </div>
-      </section>
     </div>
 
     <div v-else class="no-data">
@@ -176,22 +143,69 @@ const loadScreenings = async () => {
   }
 }
 
+const getScreeningCinemaName = (screening) => {
+  return screening?.cinema_name || screening?.cinema?.name || screening?.cinema?.cinema_name || 'Cine no disponible'
+}
+
+const getScreeningRoomName = (screening) => {
+  return screening?.room_number || screening?.room?.room_number || screening?.room?.name || 'N/A'
+}
+
+const getScreeningDateKey = (screening) => {
+  const rawDateTime = screening?.start_time || screening?.starts_at || ''
+  if (!rawDateTime) return ''
+  if (rawDateTime.includes('T')) return rawDateTime.split('T')[0]
+  return rawDateTime.split(' ')[0]
+}
+
+const sortByStartTime = (list = []) => {
+  return [...list].sort((a, b) => {
+    const aTime = new Date(a?.start_time || a?.starts_at || 0).getTime()
+    const bTime = new Date(b?.start_time || b?.starts_at || 0).getTime()
+    return aTime - bTime
+  })
+}
+
 const groupedScreenings = computed(() => {
   const groups = {}
   
   screenings.value.forEach(screening => {
-    const date = screening.start_time.split(' ')[0]
+    const date = getScreeningDateKey(screening)
+    if (!date) return
+
     if (!groups[date]) {
       groups[date] = {
         date,
+        screenings: [],
+        cinemas: {}
+      }
+    }
+
+    groups[date].screenings.push(screening)
+
+    const cinemaName = getScreeningCinemaName(screening)
+    const cinemaKey = String(screening?.cinema_id || cinemaName)
+    if (!groups[date].cinemas[cinemaKey]) {
+      groups[date].cinemas[cinemaKey] = {
+        key: cinemaKey,
+        name: cinemaName,
         screenings: []
       }
     }
-    groups[date].screenings.push(screening)
+
+    groups[date].cinemas[cinemaKey].screenings.push(screening)
   })
 
-  // Sort by date
-  return Object.values(groups).sort((a, b) => new Date(a.date) - new Date(b.date))
+  return Object.values(groups)
+    .map(group => ({
+      date: group.date,
+      screenings: sortByStartTime(group.screenings),
+      cinemaGroups: Object.values(group.cinemas).map(cinemaGroup => ({
+        ...cinemaGroup,
+        screenings: sortByStartTime(cinemaGroup.screenings)
+      }))
+    }))
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
 })
 
 const formatDate = (dateString) => {
@@ -205,10 +219,22 @@ const formatDate = (dateString) => {
 
 const formatTime = (dateTimeString) => {
   try {
+    if (!dateTimeString) return '--:--'
+    if (typeof dateTimeString === 'string') {
+      const timePart = dateTimeString.includes('T')
+        ? dateTimeString.split('T')[1]
+        : dateTimeString.split(' ')[1]
+
+      if (timePart) return timePart.slice(0, 5)
+    }
+
     const date = parseISO(dateTimeString)
     return format(date, 'HH:mm')
   } catch {
-    return dateTimeString.split(' ')[1]
+    if (!dateTimeString) return '--:--'
+    return dateTimeString.includes('T')
+      ? dateTimeString.split('T')[1]?.slice(0, 5) || '--:--'
+      : dateTimeString.split(' ')[1] || '--:--'
   }
 }
 
@@ -220,30 +246,6 @@ const handleImageError = (event) => {
   event.target.src = moviePosterPlaceholder
 }
 
-const getDateDay = (dateString) => {
-  try {
-    const date = parseISO(dateString)
-    return format(date, 'dd')
-  } catch {
-    return dateString
-  }
-}
-
-const getDateLabel = (dateString) => {
-  try {
-    const date = parseISO(dateString)
-    return format(date, "EEE, d MMM", { locale: es })
-  } catch {
-    return dateString
-  }
-}
-
-const scrollToDate = (dateString) => {
-  const element = document.querySelector(`[data-date="${dateString}"]`)
-  if (element) {
-    element.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-}
 </script>
 
 <style scoped>
@@ -336,17 +338,19 @@ const scrollToDate = (dateString) => {
 }
 
 .available-dates {
-  background: transparent;
-  padding: 1.5rem;
-  border-radius: 8px;
-  border: 1px solid rgba(102, 126, 234, 0.2);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.1) 100%);
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(102, 126, 234, 0.28);
   margin: 2rem 0;
+  box-shadow: 0 8px 22px rgba(10, 10, 24, 0.28);
 }
 
 .available-dates h3 {
-  color: var(--primary);
-  margin-bottom: 1rem;
-  font-size: 1.1rem;
+  color: rgb(231, 231, 231);
+  margin-bottom: 0.9rem;
+  font-size: 1.35rem;
+  letter-spacing: 0.2px;
 }
 
 .dates-selector {
@@ -447,6 +451,13 @@ const scrollToDate = (dateString) => {
   color: #000;
 }
 
+.preview-cinema {
+  font-size: 0.7rem;
+  color: #e0e0e0;
+  text-align: center;
+  line-height: 1.2;
+}
+
 .preview-room {
   font-size: 0.75rem;
   color: #999;
@@ -493,58 +504,88 @@ const scrollToDate = (dateString) => {
 
 .date-header {
   color: var(--primary);
-  font-size: 1.3rem;
-  margin-bottom: 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid rgba(102, 126, 234, 0.2);
+  font-size: 1.42rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid rgba(102, 126, 234, 0.26);
   text-transform: capitalize;
+  font-weight: 700;
 }
 
 .screenings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 1.5rem;
-  margin-bottom: 2rem;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
 }
 
 .screening-card {
-  background: #2d2d2d;
-  padding: 1.5rem;
-  border-radius: 8px;
-  border: 1px solid #3d3d3d;
+  background: linear-gradient(150deg, #34363b 0%, #2b2d31 100%);
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(102, 126, 234, 0.24);
   cursor: pointer;
   transition: transform 0.3s ease, box-shadow 0.3s ease;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.65rem;
 }
 
 .screening-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
-  border-color: var(--primary);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(102, 126, 234, 0.2);
+  border-color: rgba(102, 126, 234, 0.55);
+}
+
+.cinema-group {
+  margin-bottom: 1.5rem;
+}
+
+.cinema-group-header {
+  color: #e7e7e7;
+  font-size: 1.15rem;
+  margin-bottom: 0.7rem;
+  padding-left: 0.25rem;
+  font-weight: 650;
 }
 
 .cinema-name {
   color: var(--primary);
-  font-weight: 600;
-  font-size: 1.1rem;
+  font-weight: 700;
+  font-size: 1.35rem;
+  line-height: 1.2;
 }
 
 .room-name {
-  color: #999;
-  font-size: 0.9rem;
+  color: #b9bcc9;
+  font-size: 1rem;
+  font-weight: 500;
 }
 
 .time {
-  font-size: 1.5rem;
-  font-weight: 700;
+  font-size: 1.8rem;
+  font-weight: 800;
   color: #fff;
+  letter-spacing: 0.2px;
 }
 
 .available-seats {
-  color: #ccc;
-  font-size: 0.9rem;
+  color: #cfd1da;
+  font-size: 1rem;
+}
+
+.screening-card .btn.btn-primary {
+  background: linear-gradient(100deg, #d50000 0%, #ff3d2f 100%);
+  border: none;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.1rem;
+  border-radius: 14px;
+  padding: 0.75rem 1rem;
+}
+
+.screening-card .btn.btn-primary:hover {
+  filter: brightness(1.08);
 }
 
 .loading,
@@ -576,8 +617,14 @@ const scrollToDate = (dateString) => {
   }
 
   .movie-poster {
-    max-width: 200px;
+    width: min(70vw, 260px);
+    max-width: 260px;
     margin: 0 auto;
+  }
+
+  .movie-poster img {
+    object-fit: contain;
+    background: #141414;
   }
 
   .movie-content h1 {
@@ -621,13 +668,13 @@ const scrollToDate = (dateString) => {
 
   .screenings-grid {
     grid-template-columns: 1fr;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
+    gap: 0.8rem;
+    margin-bottom: 1rem;
   }
 
   .screening-card {
-    padding: 1.2rem;
-    gap: 0.75rem;
+    padding: 0.9rem;
+    gap: 0.6rem;
   }
 
   .date-group {
@@ -682,6 +729,10 @@ const scrollToDate = (dateString) => {
     font-size: 0.65rem;
   }
 
+  .preview-cinema {
+    font-size: 0.62rem;
+  }
+
   .more-btn {
     padding: 0.6rem;
   }
@@ -712,7 +763,8 @@ const scrollToDate = (dateString) => {
   }
 
   .movie-poster {
-    max-width: 180px;
+    width: min(78vw, 220px);
+    max-width: 220px;
   }
 
   .movie-content h1 {
@@ -738,7 +790,7 @@ const scrollToDate = (dateString) => {
   }
 
   .available-dates h3 {
-    font-size: 0.95rem;
+    font-size: 1.1rem;
     margin-bottom: 0.75rem;
   }
 
@@ -786,29 +838,33 @@ const scrollToDate = (dateString) => {
     font-size: 0.6rem;
   }
 
+  .preview-cinema {
+    font-size: 0.58rem;
+  }
+
   .screenings-section h2 {
     font-size: 1.2rem;
   }
 
   .screening-card {
-    padding: 1rem;
+    padding: 0.85rem;
     gap: 0.6rem;
   }
 
   .cinema-name {
-    font-size: 0.95rem;
+    font-size: 1.15rem;
   }
 
   .room-name {
-    font-size: 0.8rem;
+    font-size: 0.95rem;
   }
 
   .time {
-    font-size: 1.2rem;
+    font-size: 1.45rem;
   }
 
   .available-seats {
-    font-size: 0.8rem;
+    font-size: 0.95rem;
   }
 
   .btn {

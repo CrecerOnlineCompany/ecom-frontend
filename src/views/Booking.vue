@@ -48,10 +48,6 @@
           </div>
         </div>
 
-        <div v-if="bookingNotice" class="booking-alert">
-          <p>{{ bookingNotice }}</p>
-        </div>
-
         <div class="booking-layout">
           <!-- Seat Selection -->
           <div class="seat-selection">
@@ -78,7 +74,7 @@
                 >
                   <span v-if="isBlocked(seat)" class="occupied-icon">⛔</span>
                   <span v-else-if="isSelected(seat) || !isOccupied(seat)" class="seat-number">
-                    {{ seat.seat_code ?? seat.display_number }}
+                    {{ getSeatLabel(seat) }}
                   </span>
                   <span v-else class="occupied-icon">✗</span>
                 </div>
@@ -119,7 +115,7 @@
                   :key="seat.id"
                   class="seat-item"
                 >
-                  <span>{{ seat.seat_code ?? seat.display_number }}</span>
+                  <span>{{ getSeatLabel(seat) }}</span>
                   <span class="seat-price">${{ getSeatPrice(seat) }}</span>
                   <button 
                     @click="toggleSeat(seat)"
@@ -140,13 +136,28 @@
               <div class="price-row">
                 <span>Asientos: {{ selectedSeats.length }}</span>
               </div>
+              <div v-if="selectedProductUnits > 0" class="price-row">
+                <span>Adicionales: {{ selectedProductUnits }}</span>
+              </div>
+              <div
+                v-for="product in selectedProductsDetails"
+                :key="`summary-${product.code}`"
+                class="price-row product-row"
+              >
+                <span>{{ product.name }} x{{ product.quantity }}</span>
+                <span>{{ formatProductPrice(product.subtotal, product.currency) }}</span>
+              </div>
               <div class="price-row">
                 <span>Subtotal:</span>
                 <span>${{ subtotal.toFixed(2) }}</span>
               </div>
+              <div v-if="selectedProductUnits > 0" class="price-row">
+                <span>Subtotal adicionales:</span>
+                <span>{{ formatProductPrice(productSubtotal, productCurrency) }}</span>
+              </div>
               <div class="price-row total">
                 <span>Total:</span>
-                <span>${{ subtotal.toFixed(2) }}</span>
+                <span>{{ formatProductPrice(subtotal + productSubtotal, productCurrency) }}</span>
               </div>
             </div>
 
@@ -174,6 +185,60 @@
         No se encontró información de la función
       </div>
     </div>
+
+    <div v-if="showProductsModal" class="modal-overlay">
+      <div class="products-modal">
+        <div class="products-modal-header">
+          <h3>🍿 Agrega Productos Adicionales</h3>
+          <p>Ya seleccionaste tus entradas. ¿Quieres sumar combos o pochoclos?</p>
+        </div>
+
+        <div v-if="productsLoading" class="loading">Cargando combos...</div>
+        <div v-else-if="productsError" class="booking-alert">
+          <p>{{ productsError }}</p>
+        </div>
+        <div v-else-if="concessionProducts.length > 0" class="concession-carousel">
+          <article
+            v-for="product in concessionProducts"
+            :key="product.code"
+            class="concession-card"
+          >
+            <div class="concession-image-wrap">
+              <img
+                :src="getProductImage(product)"
+                :alt="product.name"
+                class="concession-image"
+              >
+              <span class="concession-type">{{ product.type === 'combo' ? 'Combo' : 'Producto' }}</span>
+            </div>
+            <div class="concession-body">
+              <h4>{{ product.name }}</h4>
+              <p class="concession-price">{{ formatProductPrice(product.unit_price, product.currency) }}</p>
+              <div class="concession-actions">
+                <button
+                  class="qty-btn"
+                  :disabled="getProductQuantity(product.code) <= 0"
+                  @click="decrementProduct(product.code)"
+                >
+                  −
+                </button>
+                <span class="qty-value">{{ getProductQuantity(product.code) }}</span>
+                <button class="qty-btn" @click="incrementProduct(product.code)">+</button>
+              </div>
+            </div>
+          </article>
+        </div>
+        <div v-else class="empty-cart">
+          <p>No hay productos adicionales activos para esta función.</p>
+        </div>
+
+        <div class="products-modal-actions">
+          <button class="btn btn-secondary" @click="closeProductsModal">Volver</button>
+          <button class="btn btn-secondary" @click="skipProductsAndContinue">Continuar sin adicionales</button>
+          <button class="btn btn-primary" @click="goToCheckoutFromModal">Ir a Pagar</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -181,9 +246,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { screeningService } from '@/services/ticketService'
+import { paymentService } from '@/services/paymentService'
 import { useCartStore } from '@/stores/cartStore'
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
+import { getImageUrl } from '@/utils/imageHelper'
 
 const router = useRouter()
 const route = useRoute()
@@ -194,6 +261,10 @@ const seats = ref([])
 const selectedSeats = ref([])
 const loading = ref(true)
 const seatsLoading = ref(false)
+const productsLoading = ref(false)
+const productsError = ref('')
+const concessionProducts = ref([])
+const showProductsModal = ref(false)
 const movieTitle = ref('')
 const bookingNotice = ref('')
 const FALLBACK_BASE_PRICE = 8
@@ -230,8 +301,128 @@ const parseSeatLabel = (seatLabel = '') => {
   }
 }
 
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return ['1', 'true', 'yes', 'si', 'sí'].includes(normalized)
+  }
+  return false
+}
+
 onMounted(async () => {
   await loadScreeningData()
+  await loadConcessionProducts()
+})
+
+const currencyByCode = {
+  ARS: 'es-AR',
+  USD: 'en-US',
+  EUR: 'es-ES',
+}
+
+const normalizeProductCode = (value) => String(value || '').trim().toUpperCase()
+
+const selectedProductsMap = computed(() => {
+  const map = new Map()
+  ;(cartStore.selectedProducts || []).forEach((product) => {
+    map.set(normalizeProductCode(product.code), Number(product.quantity) || 0)
+  })
+  return map
+})
+
+const loadConcessionProducts = async () => {
+  productsLoading.value = true
+  productsError.value = ''
+  try {
+    const products = await paymentService.getConcessionProducts()
+    concessionProducts.value = Array.isArray(products) ? products : []
+  } catch (error) {
+    console.error('Error loading concession products:', error)
+    productsError.value = 'No se pudieron cargar los combos en este momento.'
+    concessionProducts.value = []
+  } finally {
+    productsLoading.value = false
+  }
+}
+
+const getProductQuantity = (productCode) => {
+  return selectedProductsMap.value.get(normalizeProductCode(productCode)) || 0
+}
+
+const updateProductQuantity = (productCode, nextQuantity) => {
+  if (cartStore.items.length === 0) {
+    cartStore.clearSelectedProducts()
+    return
+  }
+  cartStore.updateSelectedProduct(normalizeProductCode(productCode), Math.max(0, Number(nextQuantity) || 0))
+}
+
+const incrementProduct = (productCode) => {
+  const current = getProductQuantity(productCode)
+  updateProductQuantity(productCode, current + 1)
+}
+
+const decrementProduct = (productCode) => {
+  const current = getProductQuantity(productCode)
+  if (current <= 0) return
+  updateProductQuantity(productCode, current - 1)
+}
+
+const formatProductPrice = (price, currency = 'ARS') => {
+  const amount = Number(price)
+  const code = String(currency || 'ARS').toUpperCase()
+  const locale = currencyByCode[code] || 'es-AR'
+  const formatter = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: code,
+    minimumFractionDigits: 2,
+  })
+  return formatter.format(Number.isFinite(amount) ? amount : 0)
+}
+
+const getProductImage = (product) => {
+  const fallbackText = encodeURIComponent(product?.name || 'Producto')
+  return getImageUrl(product?.image_url, `https://via.placeholder.com/260x150?text=${fallbackText}`)
+}
+
+const productsByCode = computed(() => {
+  const map = new Map()
+  concessionProducts.value.forEach((product) => {
+    map.set(normalizeProductCode(product.code), product)
+  })
+  return map
+})
+
+const selectedProductsDetails = computed(() => {
+  return (cartStore.selectedProducts || []).map((selected) => {
+    const code = normalizeProductCode(selected.code)
+    const catalogProduct = productsByCode.value.get(code)
+    const quantity = Number(selected.quantity) || 0
+    const unitPrice = Number(catalogProduct?.unit_price) || 0
+
+    return {
+      code,
+      name: catalogProduct?.name || code,
+      quantity,
+      unitPrice,
+      subtotal: unitPrice * quantity,
+      currency: String(catalogProduct?.currency || 'ARS').toUpperCase(),
+    }
+  })
+})
+
+const selectedProductUnits = computed(() => {
+  return selectedProductsDetails.value.reduce((sum, product) => sum + (Number(product.quantity) || 0), 0)
+})
+
+const productSubtotal = computed(() => {
+  return selectedProductsDetails.value.reduce((sum, product) => sum + (Number(product.subtotal) || 0), 0)
+})
+
+const productCurrency = computed(() => {
+  return selectedProductsDetails.value[0]?.currency || 'ARS'
 })
 
 /**
@@ -255,17 +446,24 @@ const restoreSelectedSeatsFromCart = () => {
 
   // Restaurar los asientos seleccionados aunque la API no los devuelva
   selectedSeats.value = cartSeatsInThisScreening
-    .map(cartItem => {
+    .map((cartItem, index) => {
       const cartSeatId = Number(cartItem.seat_id ?? cartItem.id)
       const seatFromApi = seats.value.find(seat => Number(seat.id) === cartSeatId)
       if (seatFromApi) return seatFromApi
 
       const parsedSeat = parseSeatLabel(cartItem.seat_label)
+      const isNonNumber = normalizeBoolean(cartItem.non_number)
+      const recoveredSeatNumber =
+        Number(cartItem.seat_number) ||
+        parsedSeat?.seat_number ||
+        (isNonNumber ? index + 1 : 1)
+
       return {
         id: cartSeatId,
         row_number: Number(cartItem.row_number) || parsedSeat?.row_number || 1,
-        seat_number: Number(cartItem.seat_number) || parsedSeat?.seat_number || 1,
+        seat_number: recoveredSeatNumber,
         seat_code: cartItem.seat_label || undefined,
+        non_number: isNonNumber,
         status: 'reserved'
       }
     })
@@ -311,7 +509,17 @@ const loadSeats = async () => {
     
     // La API devuelve { screening_id, available_seats_count, seats: [...] }
     if (response && response.seats) {
-      seats.value = response.seats
+      const responseNonNumber = normalizeBoolean(response.non_number)
+      seats.value = response.seats.map((seat) => ({
+        ...seat,
+        non_number: seat.non_number ?? responseNonNumber
+      }))
+      if (screening.value) {
+        screening.value = {
+          ...screening.value,
+          non_number: screening.value.non_number ?? responseNonNumber
+        }
+      }
       console.log('Loaded seats:', seats.value.length)
     } else if (Array.isArray(response)) {
       seats.value = response
@@ -425,7 +633,20 @@ const getSeatClass = (seat) => {
 }
 
 const getSeatCode = (seat) => {
-  return `${seat.seat_code ?? seat.display_number ?? ''}`
+  return `${getSeatLabel(seat)}`
+}
+
+const isNonNumberSeat = (seat) => {
+  const nonNumberValue =
+    seat?.non_number ??
+    screening.value?.non_number
+
+  return normalizeBoolean(nonNumberValue)
+}
+
+const getSeatLabel = (seat) => {
+  if (isNonNumberSeat(seat)) return 'S/N'
+  return `${seat?.seat_code ?? seat?.display_number ?? ''}`
 }
 
 const getRowLabel = (row, rowIndex) => {
@@ -486,6 +707,7 @@ const clearSelection = () => {
     cartStore.removeItem(seat.id)
   })
   selectedSeats.value = []
+  showProductsModal.value = false
 }
 
 const proceedToCheckout = () => {
@@ -497,13 +719,15 @@ const proceedToCheckout = () => {
     screening_id: screening.value.id
   })
 
+  let hasError = false
   // Add seats to cart
   for (const seat of selectedSeats.value) {
     const result = cartStore.addItem({
       id: seat.id,
       screening_id: screening.value.id,
       seat_id: seat.id,
-      seat_label: seat.seat_code ?? seat.display_number,
+      seat_label: getSeatLabel(seat),
+      non_number: isNonNumberSeat(seat),
       row_number: seat.row_number,
       seat_number: seat.seat_number,
       price: getSeatPrice(seat),
@@ -515,16 +739,29 @@ const proceedToCheckout = () => {
     })
 
     if (!result?.success) {
-      bookingNotice.value = result.message || cartStore.getScreeningConflictMessage()
+      alert(result.message || cartStore.getScreeningConflictMessage())
+      hasError = true
       break
     }
   }
 
-  if (bookingNotice.value) {
-    return
-  }
+  if (hasError) return
 
-  // Navigate to checkout
+  showProductsModal.value = true
+}
+
+const closeProductsModal = () => {
+  showProductsModal.value = false
+}
+
+const skipProductsAndContinue = () => {
+  cartStore.clearSelectedProducts()
+  showProductsModal.value = false
+  router.push('/checkout')
+}
+
+const goToCheckoutFromModal = () => {
+  showProductsModal.value = false
   router.push('/checkout')
 }
 
@@ -577,6 +814,141 @@ const formatTime = (dateTimeString) => {
 .booking-content {
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.76);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.products-modal {
+  width: min(1000px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #10141d;
+  border: 1px solid #2f3440;
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.products-modal-header {
+  margin-bottom: 0.9rem;
+}
+
+.products-modal-header h3 {
+  margin: 0;
+  color: var(--primary);
+}
+
+.products-modal-header p {
+  margin: 0.35rem 0 0;
+  color: #96a3b8;
+}
+
+.concession-carousel {
+  display: flex;
+  gap: 0.9rem;
+  overflow-x: auto;
+  padding-bottom: 0.4rem;
+  scroll-snap-type: x mandatory;
+}
+
+.concession-card {
+  min-width: 220px;
+  max-width: 220px;
+  border: 1px solid #2f3440;
+  border-radius: 10px;
+  background: #12151c;
+  overflow: hidden;
+  scroll-snap-align: start;
+}
+
+.concession-image-wrap {
+  position: relative;
+  height: 130px;
+  background: #0e1016;
+}
+
+.concession-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.concession-type {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(2, 6, 23, 0.85);
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+}
+
+.concession-body {
+  padding: 0.75rem;
+}
+
+.concession-body h4 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 0.95rem;
+  min-height: 2.2em;
+}
+
+.concession-price {
+  margin: 0.45rem 0 0.7rem 0;
+  color: #8be9a8;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.concession-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.qty-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  background: #0f172a;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.qty-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.qty-value {
+  min-width: 24px;
+  text-align: center;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.products-modal-actions {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 
 .screening-info {
@@ -898,6 +1270,11 @@ const formatTime = (dateTimeString) => {
   margin-bottom: 0.75rem;
   color: #ccc;
   font-size: 0.95rem;
+}
+
+.price-row.product-row {
+  color: #9fe8b7;
+  font-size: 0.88rem;
 }
 
 .price-row.total {

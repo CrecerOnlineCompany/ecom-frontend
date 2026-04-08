@@ -32,7 +32,7 @@
         <h3>Asientos Reservados</h3>
         <div class="seats-list">
           <div v-for="seat in ticket.seats" :key="seat.id" class="seat-item">
-            <span class="seat-code">{{ seat.seat_code }}</span>
+            <span class="seat-code">{{ getSeatLabel(seat) }}</span>
             <span class="seat-price">${{ seat.price }}</span>
             <span class="seat-status" :class="seat.status">{{ seat.status }}</span>
           </div>
@@ -98,6 +98,25 @@ const formatDateTime = (date) => {
     hour: '2-digit',
     minute: '2-digit'
   })
+}
+
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return ['1', 'true', 'yes', 'si', 'sí'].includes(normalized)
+  }
+  return false
+}
+
+const getSeatLabel = (seat) => {
+  if (normalizeBoolean(seat?.non_number)) return 'S/N'
+  if (seat?.seat_code) return String(seat.seat_code)
+  if (seat?.row_number != null && seat?.seat_number != null) {
+    return `F${seat.row_number}-S${seat.seat_number}`
+  }
+  return 'N/A'
 }
 </script>
 

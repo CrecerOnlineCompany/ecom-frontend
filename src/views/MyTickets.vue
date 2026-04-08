@@ -64,7 +64,7 @@
               </div>
               <div class="detail-item">
                 <span class="label">Asiento:</span>
-                <span class="seat-number">{{ ticket.seat_row }}{{ ticket.seat_number }}</span>
+                <span class="seat-number">{{ getTicketSeatLabel(ticket) }}</span>
               </div>
             </div>
 
@@ -191,6 +191,24 @@ const formatTime = (timeString) => {
   } catch {
     return timeString
   }
+}
+
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return ['1', 'true', 'yes', 'si', 'sí'].includes(normalized)
+  }
+  return false
+}
+
+const getTicketSeatLabel = (ticket) => {
+  if (normalizeBoolean(ticket?.non_number)) return 'S/N'
+  if (ticket?.seat_code) return String(ticket.seat_code)
+  const row = ticket?.seat_row || ''
+  const number = ticket?.seat_number || ''
+  return `${row}${number}` || 'N/A'
 }
 
 const downloadTicket = (ticket) => {

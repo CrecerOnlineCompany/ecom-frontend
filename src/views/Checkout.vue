@@ -20,7 +20,7 @@
             <div class="order-details">
               <p><strong>Número de Orden:</strong> {{ orderExpiresAt ? 'Procesando...' : 'N/A' }}</p>
               <p><strong>Asientos Reservados:</strong> {{ cartStore.items.length }}</p>
-              <p><strong>Total a Pagar:</strong> ${{ cartStore.totalPrice.toFixed(2) }}</p>
+              <p><strong>Total a Pagar:</strong> ${{ effectiveTotal.toFixed(2) }}</p>
             </div>
           </div>
         </div>
@@ -76,7 +76,7 @@
               <div class="order-items">
                 <div v-for="item in detailedCartItems" :key="item.id" class="order-item">
                   <div class="item-details">
-                    <p class="item-label">Asiento {{ item.seat_label }}</p>
+                    <p class="item-label">Asiento {{ item.seat_display_label }}</p>
                     <p class="item-movie" v-if="item.movie_title">{{ item.movie_title }}</p>
                     <p class="item-function" v-if="item.cinema_name || item.room_number">
                       {{ item.cinema_name || 'Cine' }}
@@ -101,16 +101,47 @@
               </div>
             </div>
 
+            <div v-if="selectedProductsDetails.length > 0" class="items-section">
+              <h4>Productos Adicionales</h4>
+              <div class="order-items">
+                <div
+                  v-for="product in selectedProductsDetails"
+                  :key="`checkout-product-${product.code}`"
+                  class="order-item product-order-item"
+                >
+                  <div class="item-details">
+                    <p class="item-label">{{ product.name }}</p>
+                    <p class="item-function">Cantidad: {{ product.quantity }}</p>
+                  </div>
+                  <div class="item-actions">
+                    <span class="item-price">{{ formatCurrency(product.subtotal, product.currency) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="order-divider"></div>
 
             <div class="totals-section">
               <div class="total-row">
                 <span>Entradas ({{ cartStore.items.length }}):</span>
-                <span>${{ subtotal.toFixed(2) }}</span>
+                <span>{{ formatCurrency(seatSubtotal, displayCurrency) }}</span>
+              </div>
+              <div v-if="selectedProductsDetails.length > 0" class="total-row">
+                <span>Adicionales ({{ totalProductUnits }}):</span>
+                <span>{{ formatCurrency(productSubtotal, displayCurrency) }}</span>
+              </div>
+              <div class="total-row">
+                <span>Subtotal:</span>
+                <span>{{ formatCurrency(effectiveBaseSubtotal, displayCurrency) }}</span>
+              </div>
+              <div v-if="effectiveTotalDiscount > 0" class="total-row discount-row">
+                <span>Descuentos automáticos:</span>
+                <span>-{{ formatCurrency(effectiveTotalDiscount, displayCurrency) }}</span>
               </div>
               <div class="total-row large">
                 <span>Total:</span>
-                <span>${{ cartStore.totalPrice.toFixed(2) }}</span>
+                <span>{{ formatCurrency(effectiveTotal, displayCurrency) }}</span>
               </div>
             </div>
           </div>
@@ -216,9 +247,10 @@
             <QRPaymentCard
               v-if="selectedPaymentMethod && paymentMethodType === 'qr' && hasQRSupport"
               :payment-provider-id="selectedPaymentMethod"
-              :amount="cartStore.totalPrice"
+              :amount="effectiveTotal"
               :screening-id="selectedScreeningId"
               :seat-ids="seatIds"
+              :products="selectedProducts"
               :customer-email="form.email"
               :customer-name="form.name"
               @payment-success="handleQRPaymentSuccess"
@@ -230,9 +262,10 @@
             <SmartPointCard
               v-else-if="selectedPaymentMethod && paymentMethodType === 'terminal' && hasTerminalSupport"
               :payment-provider-id="selectedPaymentMethod"
-              :amount="cartStore.totalPrice"
+              :amount="effectiveTotal"
               :screening-id="selectedScreeningId"
               :seat-ids="seatIds"
+              :products="selectedProducts"
               :customer-email="form.email"
               :customer-name="form.name"
               @payment-success="handleTerminalPaymentSuccess"
@@ -333,7 +366,6 @@ const {
   selectedPaymentMethod,
   paymentMethodType,
   paymentProviders,
-  subtotal,
   orderExpiresAt,
   showExpirationModal,
   expirationCountdown,
@@ -469,6 +501,116 @@ const seatIds = computed(() => {
   return cartStore.items.map(item => item.seat_id || item.id)
 })
 
+const selectedProducts = computed(() => {
+  return Array.isArray(cartStore.selectedProducts) ? cartStore.selectedProducts : []
+})
+
+const productsByCode = computed(() => {
+  const map = new Map()
+  const quoteItems = Array.isArray(cartStore.pricingQuote?.order_items)
+    ? cartStore.pricingQuote.order_items
+    : []
+
+  quoteItems
+    .filter(item => ['product', 'combo'].includes(String(item?.item_type || '').toLowerCase()))
+    .forEach(item => {
+      const code = String(item?.item_code || '').toUpperCase()
+      if (!code) return
+      map.set(code, {
+        name: item?.description || code,
+        unit_price: Number(item?.unit_price) || 0,
+        subtotal: Number(item?.subtotal) || 0,
+      })
+    })
+
+  return map
+})
+
+const selectedProductsDetails = computed(() => {
+  return selectedProducts.value
+    .map(product => {
+      const code = String(product?.code || '').toUpperCase()
+      const quantity = Number(product?.quantity) || 0
+      if (!code || quantity <= 0) return null
+
+      const quote = productsByCode.value.get(code)
+      const unitPrice = Number(quote?.unit_price) || 0
+
+      return {
+        code,
+        quantity,
+        name: quote?.name || code,
+        unit_price: unitPrice,
+        subtotal: Number.isFinite(Number(quote?.subtotal))
+          ? Number(quote.subtotal)
+          : unitPrice * quantity,
+        currency: 'ARS',
+      }
+    })
+    .filter(Boolean)
+})
+
+const totalProductUnits = computed(() => {
+  return selectedProductsDetails.value.reduce((sum, product) => sum + product.quantity, 0)
+})
+
+const productSubtotal = computed(() => {
+  return selectedProductsDetails.value.reduce((sum, product) => sum + (Number(product.subtotal) || 0), 0)
+})
+
+const seatSubtotal = computed(() => {
+  return Math.max(0, Number(effectiveBaseSubtotal.value) - Number(productSubtotal.value || 0))
+})
+
+const displayCurrency = computed(() => 'ARS')
+
+const formatCurrency = (amount, currency = 'ARS') => {
+  const value = Number(amount)
+  const safeValue = Number.isFinite(value) ? value : 0
+  const code = String(currency || 'ARS').toUpperCase()
+  const locale = code === 'USD' ? 'en-US' : (code === 'EUR' ? 'es-ES' : 'es-AR')
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: code,
+    minimumFractionDigits: 2,
+  }).format(safeValue)
+}
+
+const toNumberOrNull = (value) => {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? numericValue : null
+}
+
+const sessionBaseSubtotal = computed(() => {
+  if (!sessionActive.value || screeningMismatch.value) return null
+  return toNumberOrNull(currentSession.value?.base_subtotal)
+})
+
+const sessionTotalDiscount = computed(() => {
+  if (!sessionActive.value || screeningMismatch.value) return null
+  return toNumberOrNull(currentSession.value?.total_discount)
+})
+
+const sessionTotalPrice = computed(() => {
+  if (!sessionActive.value || screeningMismatch.value) return null
+  return toNumberOrNull(currentSession.value?.total_price)
+})
+
+const effectiveBaseSubtotal = computed(() => {
+  return sessionBaseSubtotal.value ?? cartStore.effectiveBaseSubtotal
+})
+
+const effectiveTotalDiscount = computed(() => {
+  return Math.max(0, sessionTotalDiscount.value ?? cartStore.effectiveTotalDiscount)
+})
+
+const effectiveTotal = computed(() => {
+  if (sessionTotalPrice.value !== null) {
+    return sessionTotalPrice.value
+  }
+  return Math.max(0, effectiveBaseSubtotal.value - effectiveTotalDiscount.value)
+})
+
 const detailedCartItems = computed(() => {
   return cartStore.items.map(item => {
     const screeningData = screeningDetailsById.value[item.screening_id] || {}
@@ -489,6 +631,11 @@ const detailedCartItems = computed(() => {
       screeningData.room?.name
     const startTime = item.start_time || screeningData.start_time || screeningData.starts_at
     const screeningFormat = item.screening_format || screeningData.format || screeningData.movie?.format
+    const nonNumber = normalizeBoolean(
+      item.non_number ??
+      screeningData.non_number
+    )
+    const seatDisplayLabel = nonNumber ? 'S/N' : (item.seat_label || 'N/A')
 
     return {
       ...item,
@@ -496,7 +643,9 @@ const detailedCartItems = computed(() => {
       cinema_name: cinemaName,
       room_number: roomNumber,
       start_time: startTime,
-      screening_format: screeningFormat
+      screening_format: screeningFormat,
+      non_number: nonNumber,
+      seat_display_label: seatDisplayLabel
     }
   })
 })
@@ -848,6 +997,10 @@ const removeItemFromCart = (itemId) => {
   text-align: right;
   font-size: 1rem;
   white-space: nowrap;
+}
+
+.product-order-item .item-label {
+  color: #e2e8f0;
 }
 
 .btn-remove {

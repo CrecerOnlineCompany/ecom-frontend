@@ -45,6 +45,26 @@ export function useCheckoutForm() {
     return a.every((value, index) => value === b[index])
   }
 
+  const normalizeProducts = (products = []) => {
+    return [...products]
+      .map(product => ({
+        code: String(product?.code || '').trim().toUpperCase(),
+        quantity: Number(product?.quantity) || 0,
+      }))
+      .filter(product => product.code && product.quantity > 0)
+      .sort((a, b) => a.code.localeCompare(b.code))
+  }
+
+  const isSameProductSelection = (left = [], right = []) => {
+    const a = normalizeProducts(left)
+    const b = normalizeProducts(right)
+    if (a.length !== b.length) return false
+    return a.every((product, index) => {
+      const match = b[index]
+      return product.code === match.code && product.quantity === match.quantity
+    })
+  }
+
   const hasReusableSession = ({ screeningId, seatIds, providerId, methodType }) => {
     const session = cartStore.currentSession
     if (!session || !cartStore.isSessionActive) return false
@@ -53,8 +73,9 @@ export function useCheckoutForm() {
     const sameProvider = Number(session.provider_id) === Number(providerId)
     const sameMethod = String(session.payment_method || '') === String(methodType || '')
     const sameSeats = isSameSeatSelection(session.seat_ids || [], seatIds)
+    const sameProducts = isSameProductSelection(session.products || [], cartStore.selectedProducts || [])
 
-    return sameScreening && sameProvider && sameMethod && sameSeats
+    return sameScreening && sameProvider && sameMethod && sameSeats && sameProducts
   }
 
   const getReusableOrderNumber = ({ screeningId, seatIds }) => {
@@ -306,6 +327,7 @@ export function useCheckoutForm() {
       const customerEmail = form.value.email || 'default@gmail.com'
       const customerName = form.value.name || 'default'
       const customerPhone = form.value.phone || '000000'
+      const selectedProducts = normalizeProducts(cartStore.selectedProducts || [])
 
       // Mantener email consistente durante reintentos del mismo checkout
       if (form.value.email !== customerEmail) {
@@ -316,6 +338,7 @@ export function useCheckoutForm() {
         screening_id: screeningId,
         seat_ids: seatIds,
         payment_provider_id: selectedPaymentMethod.value,
+        products: selectedProducts,
         order_number: reusableOrderNumber || undefined,
         idempotency_key: cartStore.currentSession?.idempotency_key || undefined,
         customer_email: customerEmail,
@@ -323,6 +346,7 @@ export function useCheckoutForm() {
         customer_phone: customerPhone,
         additional_data: {
           payment_method: paymentMethodType.value || 'redirect',
+          products: selectedProducts,
         },
       }
 
@@ -332,7 +356,7 @@ export function useCheckoutForm() {
       console.log('Cart items:', cartStore.items)
       console.log('Seat IDs:', seatIds)
       console.log('Seat IDs count:', seatIds.length)
-      console.log('Expected total (cart subtotal):', subtotal.value)
+      console.log('Expected total (cart effective):', cartStore.effectiveTotalPrice)
       console.log('Payment Method Type:', paymentMethodType.value)
       console.log('Selected Payment Provider ID:', selectedPaymentMethod.value)
       console.log('Sending BATCH payment request:', batchPaymentData)
@@ -352,6 +376,10 @@ export function useCheckoutForm() {
 
       // Capturar información de expiración de la orden
       if (paymentResponse.reserved_until) {
+        const totalPrice = Number(paymentResponse.total_price)
+        const baseSubtotal = Number(paymentResponse.base_subtotal)
+        const totalDiscount = Number(paymentResponse.total_discount)
+
         orderExpiresAt.value = new Date(paymentResponse.reserved_until)
         showExpirationModal.value = true
         startExpirationCountdown()
@@ -366,7 +394,17 @@ export function useCheckoutForm() {
           screening_id: screeningId,
           seat_ids: seatIds,
           idempotency_key: paymentResponse.idempotency_key,
-          redirect_url: paymentResponse.redirect_url || null
+          redirect_url: paymentResponse.redirect_url || null,
+          total_price: Number.isFinite(totalPrice) ? totalPrice : undefined,
+          base_subtotal: Number.isFinite(baseSubtotal) ? baseSubtotal : undefined,
+          total_discount: Number.isFinite(totalDiscount) ? totalDiscount : undefined,
+          applied_promotions: Array.isArray(paymentResponse.applied_promotions)
+            ? paymentResponse.applied_promotions
+            : [],
+          products: normalizeProducts(paymentResponse.products || selectedProducts),
+          order_items: Array.isArray(paymentResponse.order_items)
+            ? paymentResponse.order_items
+            : []
         })
       }
 
@@ -376,15 +414,15 @@ export function useCheckoutForm() {
       console.log('Tickets processed:', paymentResponse.tickets_count)
       console.log('Tickets data:', paymentResponse.tickets)
       console.log('Total price from backend:', paymentResponse.total_price)
-      console.log('Cart total price (frontend):', cartStore.totalPrice)
-      console.log('Match?', paymentResponse.total_price === cartStore.totalPrice)
+      console.log('Cart effective total (frontend):', cartStore.effectiveTotalPrice)
+      console.log('Match?', Number(paymentResponse.total_price) === Number(cartStore.effectiveTotalPrice))
       console.log('====================================')
 
       // Verificar si el total es incorrecto
-      if (paymentResponse.total_price !== cartStore.totalPrice) {
+      if (Number(paymentResponse.total_price) !== Number(cartStore.effectiveTotalPrice)) {
         console.warn('⚠️ WARNING: Total mismatch!')
         console.warn(`Backend calculated: $${paymentResponse.total_price}`)
-        console.warn(`Frontend expected: $${cartStore.totalPrice}`)
+        console.warn(`Frontend expected: $${cartStore.effectiveTotalPrice}`)
         console.warn(`Items in cart: ${cartStore.items.length}`)
         console.warn(`Tickets in response: ${paymentResponse.tickets_count}`)
       }

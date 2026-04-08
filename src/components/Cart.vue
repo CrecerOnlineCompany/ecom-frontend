@@ -22,7 +22,7 @@
         >
           <div class="item-info">
             <div class="item-seat">
-              {{ item.seat_label }}
+              {{ getCartSeatLabel(item) }}
               <span v-if="item.is_vip" class="vip-badge">VIP</span>
             </div>
             <div class="item-price">{{ item.price }}$</div>
@@ -31,6 +31,30 @@
             @click="cartStore.removeItem(item.id)"
             class="remove-btn"
             title="Eliminar"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div
+          v-for="product in cartProducts"
+          :key="`product-${product.code}`"
+          class="cart-item product-item"
+        >
+          <div class="item-info">
+            <div class="item-seat">
+              {{ product.name }}
+              <span class="product-qty">x{{ product.quantity }}</span>
+            </div>
+            <div class="item-price">
+              <template v-if="product.subtotal !== null">{{ product.subtotal.toFixed(2) }}$</template>
+              <template v-else>Adicional</template>
+            </div>
+          </div>
+          <button
+            @click="cartStore.updateSelectedProduct(product.code, 0)"
+            class="remove-btn"
+            title="Eliminar producto"
           >
             ✕
           </button>
@@ -47,9 +71,29 @@
           <span>VIP:</span>
           <span>{{ vipCount }}</span>
         </div>
+        <div v-if="totalProductUnits > 0" class="summary-row">
+          <span>Adicionales:</span>
+          <span>{{ totalProductUnits }}</span>
+        </div>
+        <div class="summary-row">
+          <span>Subtotal:</span>
+          <span>{{ cartStore.effectiveBaseSubtotal.toFixed(2) }}$</span>
+        </div>
+        <div v-if="cartStore.effectiveTotalDiscount > 0" class="summary-row discount">
+          <span>Descuento promo:</span>
+          <span>-{{ cartStore.effectiveTotalDiscount.toFixed(2) }}$</span>
+        </div>
+        <div
+          v-for="promo in cartStore.appliedPromotions"
+          :key="promo.promotion_id || promo.code || promo.name"
+          class="summary-row promo"
+        >
+          <span>{{ promo.name || promo.code || 'Promoción' }}</span>
+          <span>-{{ Number(promo.discount_amount || 0).toFixed(2) }}$</span>
+        </div>
         <div class="summary-row total">
           <span>Total:</span>
-          <span>{{ cartStore.totalPrice.toFixed(2) }}$</span>
+          <span>{{ cartStore.effectiveTotalPrice.toFixed(2) }}$</span>
         </div>
       </div>
 
@@ -84,6 +128,54 @@ defineEmits(['close'])
 const vipCount = computed(() => {
   return cartStore.items.filter(item => item.is_vip).length
 })
+
+const cartProducts = computed(() => {
+  const selected = Array.isArray(cartStore.selectedProducts) ? cartStore.selectedProducts : []
+  const quoteItems = Array.isArray(cartStore.pricingQuote?.order_items)
+    ? cartStore.pricingQuote.order_items
+    : []
+
+  const productItemsMap = new Map(
+    quoteItems
+      .filter(item => ['product', 'combo'].includes(String(item?.item_type || '').toLowerCase()))
+      .map(item => [
+        String(item?.item_code || '').toUpperCase(),
+        {
+          name: item?.description || String(item?.item_code || 'Producto'),
+          subtotal: Number.isFinite(Number(item?.subtotal)) ? Number(item.subtotal) : null
+        }
+      ])
+  )
+
+  return selected.map(product => {
+    const code = String(product?.code || '').toUpperCase()
+    const quoteProduct = productItemsMap.get(code)
+    return {
+      code,
+      quantity: Number(product?.quantity) || 0,
+      name: quoteProduct?.name || code || 'Producto',
+      subtotal: quoteProduct?.subtotal ?? null
+    }
+  })
+})
+
+const totalProductUnits = computed(() => {
+  return cartProducts.value.reduce((sum, product) => sum + (Number(product.quantity) || 0), 0)
+})
+
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return ['1', 'true', 'yes', 'si', 'sí'].includes(normalized)
+  }
+  return false
+}
+
+const getCartSeatLabel = (item) => {
+  return normalizeBoolean(item?.non_number) ? 'S/N' : (item?.seat_label || 'N/A')
+}
 </script>
 
 <style scoped>
@@ -166,6 +258,20 @@ const vipCount = computed(() => {
   box-shadow: var(--shadow-sm);
 }
 
+.cart-item.product-item .item-seat {
+  color: #f8fafc;
+}
+
+.product-qty {
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+
 .item-info {
   flex: 1;
 }
@@ -222,6 +328,11 @@ const vipCount = computed(() => {
   margin-bottom: 0.5rem;
   font-size: 0.95rem;
   color: #ccc;
+}
+
+.summary-row.discount,
+.summary-row.promo {
+  color: #8be9a8;
 }
 
 .summary-row.total {

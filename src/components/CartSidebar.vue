@@ -2,7 +2,7 @@
   <div v-if="!hideSidebar" class="cart-sidebar-root">
     <button class="cart-fab" type="button" @click="openSidebar">
       <span class="fab-label">Carrito</span>
-      <span class="fab-total">${{ cartStore.totalPrice.toFixed(2) }}</span>
+      <span class="fab-total">${{ cartStore.effectiveTotalPrice.toFixed(2) }}</span>
       <span v-if="cartStore.items.length > 0" class="fab-count">{{ cartStore.items.length }}</span>
     </button>
 
