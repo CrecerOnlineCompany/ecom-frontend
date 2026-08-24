@@ -1,5 +1,5 @@
 <template>
-  <>
+  <div class="header-shell">
     <div class="announcement">🚚 Envíos a todo el país · 3 cuotas sin interés</div>
     <header class="app-header">
       <div class="container app-header__top">
@@ -25,7 +25,7 @@
         <a href="/?tag=ofertas" class="offer">Ofertas</a>
       </nav>
     </header>
-  </>
+  </div>
 </template>
 
 <script setup>
