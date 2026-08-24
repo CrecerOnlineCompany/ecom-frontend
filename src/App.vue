@@ -1,38 +1,26 @@
 <template>
-  <div class="app">
-    <Navbar />
-    <main class="main-content">
+  <div class="app-shell">
+    <AppHeader />
+    <main class="app-main">
       <RouterView />
     </main>
-    <Footer />
-    <CartSidebar />
-    <Diagnostics v-if="showDiagnostics" />
-    <ActiveOrderModal />
   </div>
 </template>
 
 <script setup>
 import { RouterView } from 'vue-router'
-import Navbar from './components/Navbar.vue'
-import Footer from './components/Footer.vue'
-import CartSidebar from './components/CartSidebar.vue'
-import Diagnostics from './components/Diagnostics.vue'
-import ActiveOrderModal from './components/ActiveOrderModal.vue'
-import { appConfig } from './config/appConfig'
-
-const showDiagnostics = import.meta.env.DEV
+import AppHeader from '@/modules/ecom/components/AppHeader.vue'
 </script>
 
 <style scoped>
-.app {
+.app-shell {
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  background: linear-gradient(90deg, v-bind("appConfig.colors.background.gradient.start") 0%, v-bind("appConfig.colors.background.gradient.end") 100%);
 }
 
-.main-content {
+.app-main {
   flex: 1;
-  padding: 2rem 0;
+  padding: 20px 0 48px;
 }
 </style>

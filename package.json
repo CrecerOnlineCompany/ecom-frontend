@@ -1,5 +1,5 @@
 {
-  "name": "cinea-ticket-frontend",
+  "name": "ecom-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "vite --mode development",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix",
     "deploy:sftp": "./deploy-sftp.sh"
   },
   "dependencies": {

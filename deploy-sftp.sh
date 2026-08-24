@@ -9,21 +9,21 @@ set -euo pipefail
 # Optional:
 #   SFTP_PORT        default: 5539
 #   REMOTE_BASE_DIR  remote directory where "cd" is executed first
-#   LOCAL_ASSETS_DIR default: ../cinea/public/assets
-#   LOCAL_WELCOME_DIR default: ../cinea/resources/views/welcome.blade.php
+#   LOCAL_ASSETS_DIR default: ../backend/public/assets
+#   LOCAL_WELCOME_DIR default: ../backend/resources/views/welcome.blade.php
 #   REMOTE_ASSETS_PARENT default: public
 #   REMOTE_WELCOME_PARENT default: resources/views
 #   FORCE_CLEAN_REMOTE default: 0 (set 1 to clean remote assets/welcome first)
-SFTP_HOST="${SFTP_HOST:-168.197.50.151}"
-SFTP_USER="${SFTP_USER:-root}"
-SFTP_PASSWORD="${SFTP_PASSWORD:-Nuva_2025_RR12}"
+SFTP_HOST="${SFTP_HOST:-CHANGE_ME}"
+SFTP_USER="${SFTP_USER:-CHANGE_ME}"
+SFTP_PASSWORD="${SFTP_PASSWORD:-CHANGE_ME}"
 
-REMOTE_BASE_DIR="${REMOTE_BASE_DIR:-/var/www/cinea}"
+REMOTE_BASE_DIR="${REMOTE_BASE_DIR:-/var/www/ecom}"
 SFTP_PORT="${SFTP_PORT:-5539}"
-FORCE_CLEAN_REMOTE="${FORCE_CLEAN_REMOTE:-1}"
+FORCE_CLEAN_REMOTE="${FORCE_CLEAN_REMOTE:-0}"
 
-LOCAL_ASSETS_DIR="${LOCAL_ASSETS_DIR:-../cinea/public/assets}"
-LOCAL_WELCOME_DIR="${LOCAL_WELCOME_DIR:-../cinea/resources/views/welcome.blade.php}"
+LOCAL_ASSETS_DIR="${LOCAL_ASSETS_DIR:-../backend/public/assets}"
+LOCAL_WELCOME_DIR="${LOCAL_WELCOME_DIR:-../backend/resources/views/welcome.blade.php}"
 REMOTE_ASSETS_PARENT="${REMOTE_ASSETS_PARENT:-./public}"
 REMOTE_WELCOME_PARENT="${REMOTE_WELCOME_PARENT:-resources/views}"
 
@@ -37,8 +37,8 @@ if [[ ! -f "$LOCAL_WELCOME_DIR" ]]; then
   exit 1
 fi
 
-if [[ "$SFTP_PASSWORD" == "CHANGE_ME" ]]; then
-  echo "Set SFTP_PASSWORD in deploy-sftp.sh or export SFTP_PASSWORD before running." >&2
+if [[ "$SFTP_HOST" == "CHANGE_ME" || "$SFTP_USER" == "CHANGE_ME" || "$SFTP_PASSWORD" == "CHANGE_ME" ]]; then
+  echo "Set SFTP_HOST/SFTP_USER/SFTP_PASSWORD (env vars) before running deploy." >&2
   exit 1
 fi
 

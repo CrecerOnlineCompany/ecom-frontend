@@ -3,12 +3,12 @@
 # Variables
 PROJECT_DIR := $(shell pwd)
 DIST_DIR := $(PROJECT_DIR)/dist
-LARAVEL_PATH := $(PROJECT_DIR)/../cinea
+LARAVEL_PATH := $(PROJECT_DIR)/../backend
 BLADE_FILE := $(LARAVEL_PATH)/resources/views/welcome.blade.php
 PUBLIC_ASSETS := $(LARAVEL_PATH)/public/assets
 
 help:
-	@echo "=== Makefile para Compilación y Despliegue de Cinea Frontend ==="
+	@echo "=== Makefile para Compilación y Despliegue de Ecom Frontend ==="
 	@echo ""
 	@echo "Comandos disponibles:"
 	@echo "  make build      - Compila el proyecto para producción"
