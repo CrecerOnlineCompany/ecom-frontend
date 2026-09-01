@@ -4,7 +4,6 @@
 
 <script setup>
 import { computed } from 'vue'
-import appConfig from '@/config/appConfig'
 
 const props = defineProps({
   amount: { type: [Number, String], required: true },
@@ -12,11 +11,12 @@ const props = defineProps({
 
 const formatted = computed(() => {
   const value = Number(props.amount || 0)
-  const currency = appConfig?.app?.currency || 'ARS'
+
   try {
-    return new Intl.NumberFormat(appConfig?.app?.locale || 'es-AR', {
+    return new Intl.NumberFormat('es-AR', {
       style: 'currency',
-      currency,
+      currency: 'ARS',
+      currencyDisplay: 'narrowSymbol',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value)
@@ -25,4 +25,3 @@ const formatted = computed(() => {
   }
 })
 </script>
-
