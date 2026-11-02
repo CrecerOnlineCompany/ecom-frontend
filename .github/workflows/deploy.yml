@@ -1,0 +1,49 @@
+name: Build and deploy frontend
+
+on:
+  push:
+    branches:
+      - developer
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_API_TIMEOUT: ${{ secrets.VITE_API_TIMEOUT }}
+          VITE_STORE_SLUG: ${{ secrets.VITE_STORE_SLUG }}
+          VITE_WHATSAPP_NUMBER: ${{ secrets.VITE_WHATSAPP_NUMBER }}
+          VITE_WHATSAPP_MESSAGE: ${{ secrets.VITE_WHATSAPP_MESSAGE }}
+          VITE_INSTAGRAM_URL: ${{ secrets.VITE_INSTAGRAM_URL }}
+          VITE_FACEBOOK_URL: ${{ secrets.VITE_FACEBOOK_URL }}
+          VITE_TIKTOK_URL: ${{ secrets.VITE_TIKTOK_URL }}
+          VITE_YOUTUBE_URL: ${{ secrets.VITE_YOUTUBE_URL }}
+        run: npm run build
+
+      - name: Install SFTP dependency
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Deploy via SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR }}
+          LOCAL_DIR: dist
+        run: ./deploy-sftp.sh
